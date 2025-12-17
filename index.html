@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>政策シミュレーションゲーム - 簡易版</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #f7f7f7; }
+        .card { box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1); }
+        .input-group { display: flex; align-items: center; margin-bottom: 1rem; }
+        .input-group label { width: 180px; font-weight: 600; }
+        .simulation-container {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 1.5rem;
+        }
+        @media (min-width: 1024px) {
+            .simulation-container {
+                grid-template-columns: 1fr 1fr;
+            }
+        }
+    </style>
+</head>
+<body class="p-4 md:p-8">
+
+    <div id="app" class="max-w-6xl mx-auto">
+        <h1 class="text-3xl font-bold text-center text-indigo-700 mb-6 border-b-2 pb-2">
+            政策シミュレーションゲーム (簡易版)
+        </h1>
+        <p class="text-center text-gray-600 mb-6">
+            税率と金利を操作して、10期間（年）後の「経済」と「支持率」のバランスを取りましょう。
+        </p>
+
+        <!-- 政策入力と評価結果カード -->
+        <div class="card bg-white p-6 rounded-xl mb-8 border border-gray-200">
+            <h2 class="text-2xl font-semibold text-indigo-600 mb-4">政策介入シミュレーション</h2>
+            
+            <div class="md:flex md:space-x-8">
+                <!-- 政策入力エリア -->
+                <div class="flex-1">
+                    <h3 class="text-xl font-medium mb-3 border-b pb-1 text-gray-700">政策の決定 (次の10期間)</h3>
+                    
+                    <div class="input-group">
+                        <label for="tax-shock">税率 ($\tau$) 変更率:</label>
+                        <input type="number" id="tax-shock" value="0" min="-10" max="10" step="0.5" 
+                               class="w-24 p-2 border rounded-lg text-right focus:ring-indigo-500 focus:border-indigo-500 mr-2">
+                        <span class="text-gray-500">%</span>
+                        <p class="ml-4 text-sm text-gray-500">現在の税率からの増減率</p>
+                    </div>
+
+                    <div class="input-group">
+                        <label for="rate-shock">長期金利 ($r$) 変更幅:</label>
+                        <input type="number" id="rate-shock" value="0" min="-3.0" max="3.0" step="0.1" 
+                               class="w-24 p-2 border rounded-lg text-right focus:ring-indigo-500 focus:border-indigo-500 mr-2">
+                        <span class="text-gray-500">pt</span>
+                        <p class="ml-4 text-sm text-gray-500">現在の金利からの絶対増減幅</p>
+                    </div>
+
+                    <button onclick="runSimulation()" 
+                            class="w-full mt-4 bg-indigo-600 text-white py-3 rounded-xl hover:bg-indigo-700 transition duration-200 text-lg font-semibold shadow-md hover:shadow-lg">
+                        シミュレーション実行 (10年間)
+                    </button>
+                </div>
+
+                <!-- 結果表示エリア -->
+                <div class="flex-1 mt-6 md:mt-0 p-4 border rounded-xl bg-indigo-50">
+                    <h3 class="text-xl font-medium mb-3 border-b pb-1 text-gray-700">最終評価 (10年後)</h3>
+                    <div id="results" class="space-y-3">
+                        <p id="final-score" class="text-3xl font-extrabold text-center text-indigo-700">---</p>
+                        <p class="text-lg font-semibold text-gray-800">
+                            <span class="text-indigo-500">経済スコア (成長率):</span> <span id="economic-gain">---</span> %
+                        </p>
+                        <p class="text-lg font-semibold text-gray-800">
+                            <span class="text-indigo-500">支持率:</span> <span id="approval-rate">---</span> pt
+                        </p>
+                        <p class="text-sm text-gray-500">※ 最終スコアは成長率と支持率のバランスで決定されます。</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- グラフエリア -->
+        <div class="simulation-container">
+            <div class="card bg-white p-4 rounded-xl">
+                <h3 class="text-center font-semibold text-lg mb-2 text-gray-700">GDPと可処分所得の推移</h3>
+                <canvas id="gdpChart"></canvas>
+            </div>
+            <div class="card bg-white p-4 rounded-xl">
+                <h3 class="text-center font-semibold text-lg mb-2 text-gray-700">消費・投資・政府支出の推移</h3>
+                <canvas id="componentsChart"></canvas>
+            </div>
+        </div>
+        
+    </div>
+
+    <script>
+        // === マクロ経済モデルのパラメータ (推定結果) ===
+        // 注: c0, i0, g0 は切片ですが、簡易モデルの安定性のため固定値として扱います。
+        const PARAMS = {
+            C0: 0.8149,
+            C1: 0.1129, // 限界消費性向 (dispo_incomeの係数)
+            C2: 0.8149, // 消費の慣性 (Ct-1の係数)
+            I0: 145.4290,
+            I1: 145.4290, // 金利感応度 (long_rateの係数)
+            I2: 0.9997,  // 投資の慣性 (It-1の係数)
+            G0: 0.0330,
+            G2: 0.9895,  // 政府支出の慣性 (Gt-1の係数)
+        };
+
+        // 評価関数パラメータ
+        const WEIGHT_ECONOMIC = 0.6;
+        const WEIGHT_APPROVAL = 0.4;
+        const PENALTY_INSTABILITY = 50; 
+
+        // 初期値 (データ d の最新行を再現したダミーデータ)
+        const INITIAL_STATE = {
+            Y: 1200.0,      // GDP
+            C: 750.0,       // Consumption
+            I: 250.0,       // Investment
+            G: 200.0,       // Government Expenditure
+            T_total: 180.0, // 総税収 (t_total)
+            r: 1.5          // Long Rate (r)
+        };
+        // 初期税率 (総税収 / GDP)
+        const TAU_0 = INITIAL_STATE.T_total / INITIAL_STATE.Y; // 180 / 1200 = 0.15 (15%)
+        // 初期可処分所得
+        const DI_0 = INITIAL_STATE.Y - INITIAL_STATE.T_total; // 1200 - 180 = 1020
+
+        let gdpChart, componentsChart;
+
+        /**
+         * マクロ政策シミュレーションを実行し、評価スコアを計算する関数。
+         */
+        function macroPolicySimulation(shockTauPercent, shockRPercent, numPeriods = 10) {
+            
+            // 政策ショックの目標値
+            const tauTarget = TAU_0 * (1 + shockTauPercent / 100);
+            const rTarget = INITIAL_STATE.r + shockRPercent;
+
+            // 結果を格納する配列を初期化
+            const Y_sim = [];
+            const C_sim = [];
+            const I_sim = [];
+            const G_sim = [];
+            const T_sim = [];
+            const DispoIncome_sim = [];
+
+            // ラグ変数 (t-1) の初期化
+            let C_prev = INITIAL_STATE.C;
+            let I_prev = INITIAL_STATE.I;
+            let G_prev = INITIAL_STATE.G;
+            let Y_prev = INITIAL_STATE.Y;
+            let DispoIncome_prev = DI_0;
+
+            // 評価指標用の成長率配列 (1期目から計算するため、初期値も含めた配列を後で作成)
+            const Y_growth = [];
+            const DI_growth = [];
+
+            // --- シミュレーションループ ---
+            for (let t = 0; t < numPeriods; t++) {
+                const tau_t = tauTarget;
+                const r_t = rTarget;
+
+                // 1. 投資 I_t を決定 (I_t = i0 + i1 * r_t + i2 * I_prev)
+                const I_t = PARAMS.I0 + PARAMS.I1 * r_t + PARAMS.I2 * I_prev;
+                
+                // 2. 政府支出 G_t を決定 (G_t = g0 + g2 * G_prev)
+                const G_t = PARAMS.G0 + PARAMS.G2 * G_prev;
+                
+                // 3. 均衡GDP Y_t を決定
+                // Yt = [1 / (1 - c1 * (1 - tau_t))] * [c0 + c2 * Ct-1 + I_t + G_t]
+                const multiplierDenominator = 1 - PARAMS.C1 * (1 - tau_t);
+                
+                let Y_t;
+                if (multiplierDenominator <= 0) {
+                    Y_t = NaN; // 不安定な場合はNaN
+                } else {
+                    Y_t = (PARAMS.C0 + PARAMS.C2 * C_prev + I_t + G_t) / multiplierDenominator;
+                }
+
+                // 4. 税収 T_t を決定 (T_t = tau_t * Y_t)
+                const T_t = tau_t * Y_t;
+
+                // 5. 消費 C_t と 可処分所得 Y-T を決定
+                const DispoIncome_t = Y_t - T_t;
+                // C_t = c0 + c1 * (Yt - Tt) + c2 * Ct-1
+                const C_t = PARAMS.C0 + PARAMS.C1 * DispoIncome_t + PARAMS.C2 * C_prev;
+                
+                // 成長率の計算 (t>0 で計算可能)
+                if (t >= 0) {
+                    Y_growth.push((Y_t / Y_prev - 1) * 100);
+                    DI_growth.push((DispoIncome_t / DispoIncome_prev - 1) * 100);
+                }
+
+                // 結果を保存
+                Y_sim.push(Y_t);
+                C_sim.push(C_t);
+                I_sim.push(I_t);
+                G_sim.push(G_t);
+                T_sim.push(T_t);
+                DispoIncome_sim.push(DispoIncome_t);
+                
+                // ラグ変数を更新
+                C_prev = C_t;
+                I_prev = I_t;
+                G_prev = G_t;
+                Y_prev = Y_t;
+                DispoIncome_prev = DispoIncome_t;
+            }
+
+            // --- 目的関数の実装（評価） ---
+            const meanYGrowth = Y_growth.reduce((sum, val) => sum + val, 0) / Y_growth.length;
+            const meanDIGrowth = DI_growth.reduce((sum, val) => sum + val, 0) / DI_growth.length;
+            
+            // 安定性ペナルティの計算 (標準偏差)
+            const YGrowthStd = Math.sqrt(Y_growth.map(x => Math.pow(x - meanYGrowth, 2)).reduce((a, b) => a + b) / Y_growth.length);
+            
+            // 1. 経済スコア (平均GDP成長率)
+            const EconomicGain = meanYGrowth;
+            
+            // 2. 支持率スコア (50pt + 平均可処分所得成長率 * 10)
+            const ApprovalRate = 50 + meanDIGrowth * 10; 
+            
+            // 3. 安定性ペナルティ
+            const InstabilityPenalty = YGrowthStd * PENALTY_INSTABILITY;
+            
+            // 最終スコアの統合
+            const FinalScore = (WEIGHT_ECONOMIC * EconomicGain) + (WEIGHT_APPROVAL * ApprovalRate) - InstabilityPenalty;
+
+            return {
+                results: { Y: Y_sim, C: C_sim, I: I_sim, G: G_sim, DI: DispoIncome_sim },
+                score: { FinalScore, EconomicGain, ApprovalRate }
+            };
+        }
+
+        /**
+         * グラフを初期化または更新する関数
+         */
+        function updateCharts(data) {
+            const labels = Array.from({length: 10}, (_, i) => `T+${i + 1}`);
+            
+            // --- GDPと可処分所得のグラフ ---
+            const gdpCtx = document.getElementById('gdpChart').getContext('2d');
+            if (gdpChart) gdpChart.destroy();
+
+            gdpChart = new Chart(gdpCtx, {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [
+                        {
+                            label: 'GDP (Y)',
+                            data: data.Y,
+                            borderColor: '#4f46e5',
+                            backgroundColor: 'rgba(79, 70, 229, 0.1)',
+                            borderWidth: 3,
+                            fill: false,
+                        },
+                        {
+                            label: '可処分所得 (Y-T)',
+                            data: data.DI,
+                            borderColor: '#10b981',
+                            backgroundColor: 'rgba(16, 185, 129, 0.1)',
+                            borderWidth: 2,
+                            fill: false,
+                            borderDash: [5, 5]
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: true,
+                    plugins: { legend: { position: 'top' } },
+                    scales: { y: { beginAtZero: false } }
+                }
+            });
+
+            // --- 消費・投資・政府支出のグラフ ---
+            const componentsCtx = document.getElementById('componentsChart').getContext('2d');
+            if (componentsChart) componentsChart.destroy();
+
+            componentsChart = new Chart(componentsCtx, {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [
+                        {
+                            label: '消費 (C)',
+                            data: data.C,
+                            borderColor: '#f59e0b',
+                            backgroundColor: 'rgba(245, 158, 11, 0.1)',
+                            fill: false
+                        },
+                        {
+                            label: '投資 (I)',
+                            data: data.I,
+                            borderColor: '#ef4444',
+                            backgroundColor: 'rgba(239, 68, 68, 0.1)',
+                            fill: false
+                        },
+                        {
+                            label: '政府支出 (G)',
+                            data: data.G,
+                            borderColor: '#3b82f6',
+                            backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                            fill: false
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: true,
+                    plugins: { legend: { position: 'top' } },
+                    scales: { y: { beginAtZero: false } }
+                }
+            });
+        }
+
+        /**
+         * ボタンクリックでシミュレーションを実行し、UIを更新する
+         */
+        function runSimulation() {
+            const shockTauPercent = parseFloat(document.getElementById('tax-shock').value) || 0;
+            const shockRPercent = parseFloat(document.getElementById('rate-shock').value) || 0;
+
+            const { results, score } = macroPolicySimulation(shockTauPercent, shockRPercent);
+
+            // 評価結果の表示
+            document.getElementById('final-score').textContent = score.FinalScore.toFixed(0);
+            document.getElementById('economic-gain').textContent = score.EconomicGain.toFixed(2);
+            document.getElementById('approval-rate').textContent = score.ApprovalRate.toFixed(2);
+            
+            // グラフの更新
+            updateCharts(results);
+
+            // メッセージボックス
+            const messageBox = document.createElement('div');
+            messageBox.className = 'fixed top-4 right-4 bg-green-500 text-white p-4 rounded-lg shadow-xl transition-opacity duration-300';
+            messageBox.textContent = `シミュレーション完了: 最終スコア ${score.FinalScore.toFixed(0)}を達成しました。`;
+            document.body.appendChild(messageBox);
+            setTimeout(() => {
+                messageBox.remove();
+            }, 3000);
+        }
+
+        // 初期グラフの描画
+        window.onload = function() {
+            // 初期状態のシミュレーションを実行して、デフォルトのグラフを表示
+            const { results } = macroPolicySimulation(0, 0); 
+            updateCharts(results);
+
+             // 初期スコア表示のクリア
+            document.getElementById('final-score').textContent = "政策を入力";
+            document.getElementById('economic-gain').textContent = "---";
+            document.getElementById('approval-rate').textContent = "---";
+        };
+
+    </script>
+</body>
+</html>
