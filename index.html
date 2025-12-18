@@ -1,482 +1,546 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { 
-  TrendingUp, 
-  TrendingDown, 
-  Users, 
-  Activity, 
-  AlertTriangle, 
-  CheckCircle2, 
-  Info,
-  ChevronRight,
-  RefreshCw,
-  Building2,
-  Coins,
-  Flame,
-  Sun
-} from 'lucide-react';
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Economy Sim Lite - 国民の声 -</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=M+PLUS+Rounded+1c:wght@400;700;800&display=swap');
 
-/**
- * Economy Sim Lite - 国民の声 -
- * A high-fidelity economic simulation based on 2SLS structural equations.
- */
+        body {
+            font-family: 'M PLUS Rounded 1c', sans-serif;
+            background-color: #1a202c;
+            touch-action: manipulation;
+            user-select: none;
+        }
 
-const MAX_TURNS = 16;
-const INITIAL_VALUES = {
-  turn: 1,
-  support: 50.0,
-  economy: 50.0, // Visual meter 0-100
-  safety: 80.0,
-  // Economic Variables
-  C: 155000,     // Consumption
-  I: 25000,      // Investment
-  G: 40000,      // Gov Spending (Fixed)
-  Def: 100.0,    // GDP Deflator
-  ShortRate: 0.1,
-  Tax: 40000,    // Initial Tax amount
-  NominalIncome: 180000, // Fixed nominal income as per specs
-  GDP: 220000,   // C + I + G
-  PrevGDP: 220000,
-  PrevI: 25000,
-  PrevC: 155000,
-  PrevDef: 100.0,
-  PrevDispo: 1400.0, // (Nominal - Tax) / (Def/100)
-};
+        /* ニュースティッカー */
+        .ticker-wrap {
+            width: 100%;
+            overflow: hidden;
+            background-color: #000;
+            color: #fbbf24;
+            white-space: nowrap;
+            border-top: 2px solid #fbbf24;
+            border-bottom: 2px solid #fbbf24;
+        }
+        .ticker {
+            display: inline-block;
+            padding-left: 100%;
+            animation: ticker 20s linear infinite;
+        }
+        @keyframes ticker {
+            0% { transform: translate3d(0, 0, 0); }
+            100% { transform: translate3d(-100%, 0, 0); }
+        }
 
-const App = () => {
-  // --- Game State ---
-  const [gameState, setGameState] = useState(INITIAL_VALUES);
-  const [policy, setPolicy] = useState({ tax: 'maintain', rate: 'maintain' });
-  const [history, setHistory] = useState([]);
-  const [showModal, setShowModal] = useState(false);
-  const [gameOver, setGameOver] = useState(null); // 'win', 'lose_support', 'lose_safety'
-  const [lastTurnReport, setLastTurnReport] = useState(null);
+        /* パラメータバー */
+        .meter-bg {
+            background-color: #4a5568;
+            height: 12px;
+            border-radius: 6px;
+            overflow: hidden;
+            position: relative;
+        }
+        .meter-fill {
+            height: 100%;
+            transition: width 0.5s ease-out, background-color 0.5s;
+        }
+        /* 治安の「危険ゾーン」表示 */
+        .danger-zone {
+            position: absolute;
+            right: 0;
+            top: 0;
+            height: 100%;
+            width: 20%;
+            background-color: rgba(255, 0, 0, 0.3);
+            z-index: 1;
+        }
 
-  // --- Calculations ---
-  const processTurn = () => {
-    const s = { ...gameState };
-    
-    // 1. Update Policy values
-    let currentShortRate = s.ShortRate;
-    if (policy.rate === 'up') currentShortRate += 0.5;
-    if (policy.rate === 'down') currentShortRate = Math.max(0.01, currentShortRate - 0.5);
+        /* ボタン */
+        .ctrl-btn {
+            transition: all 0.2s;
+        }
+        .ctrl-btn:active {
+            transform: scale(0.95);
+        }
+        .ctrl-btn.selected {
+            ring: 4px;
+            ring-opacity: 0.5;
+            transform: translateY(-2px);
+            font-weight: bold;
+        }
 
-    let currentTax = s.Tax;
-    if (policy.tax === 'up') currentTax += 2000;
-    if (policy.tax === 'down') currentTax = Math.max(10000, currentTax - 2000);
+        /* キャラクターアニメーション */
+        .char-img {
+            transition: transform 0.3s, filter 0.3s;
+            filter: drop-shadow(0 0 10px rgba(0,0,0,0.5));
+        }
+        .anim-panic { animation: shake 0.5s infinite; }
+        .anim-joy { animation: bounce 0.5s infinite alternate; }
+        @keyframes shake { 0% { transform: translateX(0); } 25% { transform: translateX(-5px); } 75% { transform: translateX(5px); } 100% { transform: translateX(0); } }
+        @keyframes bounce { 0% { transform: translateY(0); } 100% { transform: translateY(-10px); } }
 
-    // 2. Economic Structural Equations (4.1)
-    // Long Rate propagation
-    const longRate = 1.2057 + 0.4924 * currentShortRate;
+        /* 背景オーバーレイ（治安悪化演出用） */
+        #overlay-layer {
+            transition: background-color 1s;
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body class="h-screen w-full flex items-center justify-center overflow-hidden bg-gray-900 text-gray-100">
 
-    // Investment Function
-    const newI = 5875.2 - 24.170 * longRate + 0.9508 * s.PrevI;
-
-    // Consumption Function
-    // Using current disposable income: NominalIncome - currentTax
-    const disposableIncome = s.NominalIncome - currentTax;
-    const newC = 9398.9 + 0.0216 * disposableIncome + 0.9331 * s.PrevC;
-
-    // GDP
-    const newGDP = newC + newI + s.G;
-
-    // Deflator (Inflation)
-    const newDef = -0.7073 + 1.0033 * s.PrevDef + 0.0000008149 * newGDP;
-
-    // 3. Real Disposable Income (4.2)
-    const realDispo = disposableIncome / (newDef / 100);
-
-    // 4. Growth Rates for Scoring (4.3)
-    const growthGDP = ((newGDP - s.GDP) / s.GDP) * 100;
-    const growthI = ((newI - s.I) / s.I) * 100;
-    const growthDispo = ((realDispo - s.PrevDispo) / s.PrevDispo) * 100;
-    const inflationRate = ((newDef - s.PrevDef) / s.PrevDef) * 100;
-
-    // 5. Support Score Delta (4.3.1)
-    // ΔScore = w1*Growth(Dispo) + w2*Growth(I) + w4*Growth(GDP) - w3*Inflation
-    const w1 = 10.0, w2 = 15.0, w3 = 50.0, w4 = 10.0;
-    const deltaScore = (w1 * growthDispo) + (w2 * growthI) + (w4 * growthGDP) - (w3 * (inflationRate - 0.1));
-
-    const newSupport = Math.max(0, Math.min(100, s.support + deltaScore));
-    
-    // 6. Visual Economy Meter (derived from GDP growth and inflation balance)
-    const economyHealth = Math.max(0, Math.min(100, 50 + (growthGDP * 5) - (inflationRate * 2)));
-
-    // 7. Safety Calculation (Abstracted: drops if support or economy is very low)
-    let safetyDelta = 0;
-    if (newSupport < 30) safetyDelta -= 5;
-    if (economyHealth < 20) safetyDelta -= 10;
-    if (inflationRate > 2.0) safetyDelta -= 3;
-    if (newSupport > 60 && economyHealth > 40) safetyDelta += 2;
-    const newSafety = Math.max(0, Math.min(100, s.safety + safetyDelta));
-
-    // Update State
-    const nextState = {
-      ...s,
-      turn: s.turn + 1,
-      support: newSupport,
-      economy: economyHealth,
-      safety: newSafety,
-      C: newC,
-      I: newI,
-      Def: newDef,
-      ShortRate: currentShortRate,
-      Tax: currentTax,
-      GDP: newGDP,
-      PrevGDP: s.GDP,
-      PrevI: s.I,
-      PrevC: s.C,
-      PrevDef: s.Def,
-      PrevDispo: realDispo
-    };
-
-    setLastTurnReport({
-      deltaScore,
-      inflationRate,
-      growthGDP,
-      growthDispo,
-      growthI
-    });
-
-    setGameState(nextState);
-    setHistory([...history, nextState]);
-    setShowModal(true);
-
-    // Check Endings
-    if (newSupport <= 0) setGameOver('lose_support');
-    else if (newSafety <= 0) setGameOver('lose_safety');
-    else if (nextState.turn > MAX_TURNS) setGameOver('win');
-  };
-
-  const resetGame = () => {
-    setGameState(INITIAL_VALUES);
-    setPolicy({ tax: 'maintain', rate: 'maintain' });
-    setHistory([]);
-    setGameOver(null);
-    setShowModal(false);
-  };
-
-  // --- Dynamic Assets ---
-  const getBackgroundInfo = () => {
-    if (gameState.safety < 30) return { 
-      label: '暴動', 
-      icon: <Flame className="w-12 h-12 text-red-500 animate-pulse" />, 
-      bg: 'bg-red-950', 
-      overlay: 'bg-red-900/40',
-      text: '街の一部でデモが発生し、火の手が上がっています。'
-    };
-    if (gameState.economy > 80) return { 
-      label: '好景気', 
-      icon: <Sun className="w-12 h-12 text-yellow-400 animate-bounce" />, 
-      bg: 'bg-blue-900', 
-      overlay: 'bg-yellow-400/10',
-      text: '高層ビルが立ち並び、街は活気に満ち溢れています。'
-    };
-    if (gameState.economy < 20) return { 
-      label: '不況', 
-      icon: <Building2 className="w-12 h-12 text-slate-600" />, 
-      bg: 'bg-slate-900', 
-      overlay: 'bg-blue-900/30',
-      text: 'シャッターを下ろした店が目立ち、人影もまばらです。'
-    };
-    return { 
-      label: '通常', 
-      icon: <Building2 className="w-12 h-12 text-blue-400" />, 
-      bg: 'bg-indigo-950', 
-      overlay: '',
-      text: '穏やかな平日の街並みです。'
-    };
-  };
-
-  const getSecretaryDialogue = () => {
-    if (gameState.safety < 30 || gameState.support < 20) return { 
-      mood: 'Panic', 
-      msg: '総理！国民の怒りが頂点に達しています！早急な対策を！' 
-    };
-    if (gameState.economy > 70 && gameState.support > 60) return { 
-      mood: 'Joy', 
-      msg: '素晴らしい！政権への期待感が高まっていますよ！' 
-    };
-    if (lastTurnReport?.inflationRate > 1.5) return { 
-      mood: 'Worry', 
-      msg: '物価上昇が止まりません。減税よりも利上げを検討すべきでは？' 
-    };
-    return { 
-      mood: 'Normal', 
-      msg: '現在の経済状況を報告します。次の施策を決定してください。' 
-    };
-  };
-
-  const bg = getBackgroundInfo();
-  const dialogue = getSecretaryDialogue();
-
-  return (
-    <div className={`min-h-screen flex flex-col font-sans text-white transition-colors duration-1000 ${bg.bg}`}>
-      
-      {/* HEADER AREA */}
-      <header className="p-4 bg-black/40 backdrop-blur-md border-b border-white/10 sticky top-0 z-10">
-        <div className="max-w-md mx-auto flex flex-col gap-3">
-          <div className="flex justify-between items-end">
-            <div>
-              <h1 className="text-xs font-bold text-blue-400 tracking-widest uppercase">Economy Sim Lite</h1>
-              <div className="text-xl font-bold flex items-center gap-2">
-                就任 {gameState.turn}期目
-                <span className="text-xs text-white/50 font-normal">あと {MAX_TURNS - gameState.turn + 1}期</span>
-              </div>
-            </div>
-            <div className="text-right">
-              <div className="text-xs text-white/60">社会秩序</div>
-              <div className="text-sm font-mono">{gameState.safety.toFixed(1)}%</div>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-1">
-              <div className="flex justify-between text-[10px] uppercase font-bold tracking-tighter">
-                <span className="flex items-center gap-1"><Users size={12}/> Support</span>
-                <span>{gameState.support.toFixed(1)}%</span>
-              </div>
-              <div className="h-3 w-full bg-white/10 rounded-full overflow-hidden border border-white/5">
-                <div 
-                  className={`h-full transition-all duration-1000 ${gameState.support < 30 ? 'bg-red-500' : 'bg-pink-500'}`}
-                  style={{ width: `${gameState.support}%` }}
-                />
-              </div>
-            </div>
-            <div className="space-y-1">
-              <div className="flex justify-between text-[10px] uppercase font-bold tracking-tighter">
-                <span className="flex items-center gap-1"><Activity size={12}/> Economy</span>
-                <span>{gameState.economy.toFixed(1)}%</span>
-              </div>
-              <div className="h-3 w-full bg-white/10 rounded-full overflow-hidden border border-white/5 relative">
-                <div 
-                  className="h-full bg-blue-500 transition-all duration-1000"
-                  style={{ width: `${gameState.economy}%` }}
-                />
-                <div className="absolute top-0 right-0 w-[20%] h-full bg-red-500/30 border-l border-red-500/50" />
-              </div>
-            </div>
-          </div>
-        </div>
-      </header>
-
-      {/* MAIN AREA (VISUALS) */}
-      <main className="flex-1 relative overflow-hidden flex flex-col items-center justify-center p-6">
-        {/* Dynamic Background Overlay */}
-        <div className={`absolute inset-0 transition-colors duration-1000 ${bg.overlay}`} />
+    <div id="game-container" class="relative w-full max-w-lg h-full max-h-[850px] bg-gray-800 shadow-2xl overflow-hidden flex flex-col md:rounded-xl border-4 border-gray-600">
         
-        {/* News Ticker */}
-        <div className="absolute top-8 w-full bg-black/60 py-1 border-y border-white/5 overflow-hidden">
-          <div className="whitespace-nowrap animate-marquee flex items-center gap-8">
-            <span className="text-xs font-bold text-yellow-400">【速報】</span>
-            <span className="text-xs">
-              {gameState.support < 30 ? '支持率急落により内閣不信任案の噂も' : 
-               gameState.economy > 80 ? '史上空前の好景気、株価は最高値を更新' :
-               gameState.economy < 30 ? '実体経済の冷え込み深刻、倒産件数が増加' :
-               '本日の閣議決定に基づき、新たな経済政策が施行されます'}
-            </span>
-            <span className="opacity-50">|</span>
-            <span className="text-xs">
-              {gameState.Def > 105 ? '物価高騰に悲鳴「卵が1個100円」' : '政府、デフレ脱却を宣言'}
-            </span>
-          </div>
+        <!-- 背景画像 -->
+        <div id="game-bg" class="absolute inset-0 z-0 bg-cover bg-center transition-all duration-1000 opacity-60" 
+             style="background-image: url('https://images.unsplash.com/photo-1486406146926-c627a92ad1ab?auto=format&fit=crop&w=800&q=80');">
+        </div>
+        <!-- 治安悪化時のフィルター -->
+        <div id="overlay-layer" class="absolute inset-0 z-0 bg-transparent"></div>
+
+        <!-- ヘッダー：3つの抽象化メーター -->
+        <div class="relative z-20 bg-gray-900/90 p-4 border-b border-gray-600 shadow-lg">
+            <div class="flex justify-between items-center mb-2">
+                <span class="bg-blue-600 px-3 py-1 rounded text-xs font-bold" id="period-lbl">就任 1期目</span>
+                <span class="text-xs text-gray-400">残り任期: <span id="turns-left">16</span>期</span>
+            </div>
+
+            <!-- メーター群 -->
+            <div class="space-y-3">
+                <!-- 1. 支持率 (HP) -->
+                <div class="flex items-center gap-3">
+                    <div class="w-8 text-center text-xl"><i class="fas fa-heart text-pink-500"></i></div>
+                    <div class="flex-grow">
+                        <div class="flex justify-between text-xs mb-1 font-bold">
+                            <span>内閣支持率</span>
+                            <span id="val-support">50%</span>
+                        </div>
+                        <div class="meter-bg bg-gray-700">
+                            <div id="bar-support" class="meter-fill bg-pink-500" style="width: 50%"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 2. 景気 (Economy) -->
+                <div class="flex items-center gap-3">
+                    <div class="w-8 text-center text-xl" id="icon-economy"><i class="fas fa-sun text-orange-400"></i></div>
+                    <div class="flex-grow">
+                        <div class="flex justify-between text-xs mb-1 font-bold">
+                            <span>経済状況</span>
+                            <span id="text-economy" class="text-orange-400">好調</span>
+                        </div>
+                        <div class="meter-bg bg-gray-700">
+                            <div id="bar-economy" class="meter-fill bg-orange-400" style="width: 60%"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 3. 治安/格差 (Safety) -->
+                <div class="flex items-center gap-3">
+                    <div class="w-8 text-center text-xl" id="icon-safety"><i class="fas fa-shield-alt text-blue-400"></i></div>
+                    <div class="flex-grow">
+                        <div class="flex justify-between text-xs mb-1 font-bold">
+                            <span>治安レベル</span>
+                            <span id="text-safety" class="text-blue-400">安全</span>
+                        </div>
+                        <div class="meter-bg bg-gray-700">
+                            <div class="danger-zone"></div> <!-- 右端20%は暴動リスク -->
+                            <div id="bar-safety" class="meter-fill bg-blue-500" style="width: 80%"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
         </div>
 
-        {/* Central Visual */}
-        <div className="z-0 opacity-50 absolute inset-0 flex items-center justify-center">
-            {bg.icon}
+        <!-- ニュースティッカー -->
+        <div class="relative z-10 ticker-wrap h-8">
+            <div class="ticker leading-8 text-sm font-bold" id="news-ticker">
+                新政権発足。「国民のための政治」を掲げスタート。
+            </div>
         </div>
 
-        {/* Secretary Character Area */}
-        <div className="relative mt-auto w-full max-w-sm flex items-end">
-          <div className="bg-black/60 backdrop-blur-lg p-4 rounded-2xl border border-white/10 mb-8 w-full shadow-2xl">
-            <div className="flex gap-4 items-start">
-              <div className={`w-12 h-12 rounded-full bg-blue-500/20 flex-shrink-0 flex items-center justify-center border border-blue-400/30 ${dialogue.mood === 'Panic' ? 'animate-bounce' : ''}`}>
-                <span className="text-2xl">{dialogue.mood === 'Panic' ? '😨' : dialogue.mood === 'Joy' ? '😊' : '📋'}</span>
-              </div>
-              <div>
-                <div className="text-[10px] text-blue-400 font-bold mb-1 uppercase tracking-widest">首席秘書官官</div>
-                <p className="text-sm leading-relaxed">{dialogue.msg}</p>
-              </div>
-            </div>
-          </div>
-        </div>
-      </main>
-
-      {/* FOOTER AREA (CONTROLS) */}
-      <footer className="p-6 bg-slate-950/90 backdrop-blur-xl border-t border-white/10 rounded-t-[2rem] shadow-[0_-10px_40px_rgba(0,0,0,0.5)]">
-        <div className="max-w-md mx-auto space-y-6">
-          <div className="grid grid-cols-2 gap-4">
-            {/* Tax Control */}
-            <div className="space-y-2">
-              <label className="text-[10px] font-bold text-white/40 uppercase flex items-center gap-1">
-                <Coins size={12}/> 税金設定
-              </label>
-              <div className="grid grid-cols-1 gap-1">
-                {['up', 'maintain', 'down'].map((type) => (
-                  <button
-                    key={type}
-                    onClick={() => setPolicy({...policy, tax: type})}
-                    className={`py-2 px-3 rounded-lg text-xs font-bold transition-all border ${
-                      policy.tax === type 
-                      ? 'bg-blue-600 border-blue-400 shadow-[0_0_15px_rgba(37,99,235,0.4)] scale-[1.02]' 
-                      : 'bg-white/5 border-white/10 text-white/50 hover:bg-white/10'
-                    }`}
-                  >
-                    {type === 'up' ? '増税' : type === 'down' ? '減税' : '現状維持'}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* Interest Rate Control */}
-            <div className="space-y-2">
-              <label className="text-[10px] font-bold text-white/40 uppercase flex items-center gap-1">
-                <TrendingUp size={12}/> 金利設定 (短期)
-              </label>
-              <div className="grid grid-cols-1 gap-1">
-                {['up', 'maintain', 'down'].map((type) => (
-                  <button
-                    key={type}
-                    onClick={() => setPolicy({...policy, rate: type})}
-                    className={`py-2 px-3 rounded-lg text-xs font-bold transition-all border ${
-                      policy.rate === type 
-                      ? 'bg-indigo-600 border-indigo-400 shadow-[0_0_15px_rgba(79,70,229,0.4)] scale-[1.02]' 
-                      : 'bg-white/5 border-white/10 text-white/50 hover:bg-white/10'
-                    }`}
-                  >
-                    {type === 'up' ? '利上げ' : type === 'down' ? '利下げ' : '現状維持'}
-                  </button>
-                ))}
-              </div>
-            </div>
-          </div>
-
-          <button
-            onClick={processTurn}
-            disabled={!!gameOver}
-            className="w-full py-4 bg-gradient-to-r from-blue-600 to-indigo-600 rounded-xl font-bold flex items-center justify-center gap-2 shadow-lg hover:brightness-110 active:scale-95 transition-all"
-          >
-            政策を実行する <ChevronRight size={18}/>
-          </button>
-        </div>
-      </footer>
-
-      {/* TURN RESULT MODAL */}
-      {showModal && !gameOver && lastTurnReport && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-6 bg-black/80 backdrop-blur-sm">
-          <div className="bg-slate-900 border border-white/20 rounded-3xl w-full max-w-sm overflow-hidden shadow-2xl animate-in zoom-in duration-300">
-            <div className="p-6 border-b border-white/10 bg-white/5">
-              <h2 className="text-xl font-bold flex items-center gap-2">
-                <Info className="text-blue-400"/> 第{gameState.turn - 1}期 報告書
-              </h2>
-            </div>
-            <div className="p-6 space-y-4">
-              <div className="grid grid-cols-2 gap-4">
-                <div className="bg-white/5 p-3 rounded-xl border border-white/5">
-                  <div className="text-[10px] text-white/40 font-bold mb-1 uppercase">GDP成長率</div>
-                  <div className={`text-lg font-mono flex items-center gap-1 ${lastTurnReport.growthGDP >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                    {lastTurnReport.growthGDP >= 0 ? '+' : ''}{lastTurnReport.growthGDP.toFixed(2)}%
-                    {lastTurnReport.growthGDP >= 0 ? <TrendingUp size={16}/> : <TrendingDown size={16}/>}
-                  </div>
-                </div>
-                <div className="bg-white/5 p-3 rounded-xl border border-white/5">
-                  <div className="text-[10px] text-white/40 font-bold mb-1 uppercase">インフレ率</div>
-                  <div className={`text-lg font-mono ${lastTurnReport.inflationRate > 0.5 ? 'text-orange-400 font-bold' : 'text-blue-300'}`}>
-                    {lastTurnReport.inflationRate.toFixed(2)}%
-                  </div>
-                </div>
-              </div>
-              
-              <div className="space-y-1">
-                <div className="text-xs text-white/60 mb-1">実質可処分所得の変化</div>
-                <div className="h-2 w-full bg-white/10 rounded-full overflow-hidden">
-                  <div 
-                    className={`h-full transition-all duration-1000 ${lastTurnReport.growthDispo >= 0 ? 'bg-green-500' : 'bg-red-500'}`}
-                    style={{ width: `${Math.min(100, Math.abs(lastTurnReport.growthDispo) * 10 + 10)}%`, marginLeft: lastTurnReport.growthDispo < 0 ? 'auto' : '0' }}
-                  />
-                </div>
-                <div className="text-[10px] text-right text-white/40 italic">
-                  物価高により手取りが {lastTurnReport.growthDispo < 0 ? '減少' : '増加'}
-                </div>
-              </div>
-
-              <div className="p-3 bg-blue-500/10 border border-blue-500/20 rounded-xl">
-                <div className="text-[10px] text-blue-400 font-bold mb-1 uppercase tracking-widest">支持率への影響</div>
-                <div className={`text-xl font-bold ${lastTurnReport.deltaScore >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                   {lastTurnReport.deltaScore >= 0 ? '+' : ''}{lastTurnReport.deltaScore.toFixed(1)} pt
-                </div>
-              </div>
-            </div>
-            <button
-              onClick={() => setShowModal(false)}
-              className="w-full py-4 bg-blue-600 font-bold hover:bg-blue-500 transition-colors"
-            >
-              次期へ進む
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* GAME OVER MODAL */}
-      {gameOver && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center p-6 bg-black/90 backdrop-blur-md">
-          <div className="bg-slate-900 border border-white/20 rounded-[2.5rem] w-full max-w-sm overflow-hidden shadow-[0_0_100px_rgba(0,0,0,1)] animate-in slide-in-from-bottom-10 duration-500">
-            <div className={`p-10 text-center ${gameOver === 'win' ? 'bg-gradient-to-b from-yellow-500/20 to-transparent' : 'bg-gradient-to-b from-red-500/20 to-transparent'}`}>
-              <div className="inline-flex items-center justify-center w-20 h-20 rounded-full mb-6 bg-white/5 border border-white/10">
-                {gameOver === 'win' ? <CheckCircle2 className="text-yellow-400 w-10 h-10" /> : <AlertTriangle className="text-red-500 w-10 h-10" />}
-              </div>
-              <h2 className="text-2xl font-black mb-2 uppercase tracking-tighter">
-                {gameOver === 'win' ? '任期満了 - 伝説の宰相' : '政権崩壊 - 歴史の闇へ'}
-              </h2>
-              <p className="text-white/60 text-sm leading-relaxed">
-                {gameOver === 'win' && '激動の4年間を乗り越え、歴史に名を残しました。あなたの政策は後世に語り継がれるでしょう。'}
-                {gameOver === 'lose_support' && '支持率低下により選挙で大敗。政権交代が起きました。国民の信頼を取り戻すことはできませんでした。'}
-                {gameOver === 'lose_safety' && '怒れる暴徒により官邸が包囲され、政権は崩壊しました。秩序なき経済は破滅を招きました。'}
-              </p>
-            </div>
+        <!-- メインエリア：秘書官と社会の様子 -->
+        <div class="flex-grow relative z-10 flex flex-col justify-end pb-4 pointer-events-none">
+            <!-- 秘書官画像 -->
+            <img src="https://blogger.googleusercontent.com/img/b/R29vZ2xl/AVvXsEiPPDde_59jmOm49ynT1scGbsqejmS4pg6I7g6_yGSLe7Gu7MgRqLURZZrC2NdoDpH8gz1Z-DPhUb4IvoAqk9JkWdg8UdZINM-unep1PYlje1DL4iJCH7AJGPhvxKtv1bjvuyxf2LvSjzLR/s800/face_smile_woman4.png" 
+                 id="secretary-img" 
+                 class="absolute bottom-10 right-[-20px] w-2/3 max-w-[280px] object-contain char-img">
             
-            <div className="px-10 pb-10 space-y-6">
-              <div className="grid grid-cols-2 gap-2 text-center">
-                <div className="bg-white/5 p-4 rounded-2xl border border-white/5">
-                  <div className="text-[10px] text-white/40 font-bold uppercase mb-1">最終支持率</div>
-                  <div className="text-2xl font-mono font-bold text-pink-500">{gameState.support.toFixed(1)}%</div>
-                </div>
-                <div className="bg-white/5 p-4 rounded-2xl border border-white/5">
-                  <div className="text-[10px] text-white/40 font-bold uppercase mb-1">経済評価</div>
-                  <div className="text-2xl font-mono font-bold text-blue-500">{gameState.economy.toFixed(1)}</div>
-                </div>
-              </div>
-
-              <div className="text-center">
-                 <div className="text-[10px] text-white/40 font-bold uppercase mb-2">SCORE</div>
-                 <div className="text-5xl font-black tracking-tighter text-transparent bg-clip-text bg-gradient-to-r from-yellow-400 via-white to-yellow-600">
-                    {Math.round(gameState.support + gameState.economy + gameState.safety)}
-                 </div>
-              </div>
-
-              <button
-                onClick={resetGame}
-                className="w-full py-4 bg-white text-black font-black rounded-2xl flex items-center justify-center gap-2 hover:bg-white/90 active:scale-95 transition-all"
-              >
-                <RefreshCw size={18}/> 再挑戦する
-              </button>
+            <!-- 吹き出し -->
+            <div class="bg-white/95 text-gray-800 border-2 border-gray-400 rounded-xl p-4 shadow-xl mb-4 mx-4 self-start max-w-[70%] relative pointer-events-auto">
+                <div class="absolute -bottom-2 left-6 w-4 h-4 bg-white border-r-2 border-b-2 border-gray-400 transform rotate-45"></div>
+                <div class="font-bold text-gray-500 text-xs mb-1"><i class="fas fa-user-tie"></i> 秘書官</div>
+                <p id="secretary-msg" class="text-sm font-bold leading-relaxed">
+                    総理、今期の方針を決定してください。<br>今のところ街は平和です。
+                </p>
             </div>
-          </div>
         </div>
-      )}
 
-      {/* Marquee Keyframes */}
-      <style>{`
-        @keyframes marquee {
-          0% { transform: translateX(100%); }
-          100% { transform: translateX(-100%); }
-        }
-        .animate-marquee {
-          animation: marquee 20s linear infinite;
-        }
-      `}</style>
+        <!-- 操作パネル（3つの変数） -->
+        <div class="relative z-30 bg-gray-900 border-t-4 border-gray-700 p-4">
+            <div class="grid grid-cols-3 gap-2 mb-4">
+                <!-- 税金 -->
+                <div class="flex flex-col gap-2">
+                    <div class="text-center text-xs font-bold text-gray-400">税金</div>
+                    <button onclick="setPolicy('tax', 'up')" id="btn-tax-up" class="ctrl-btn bg-gray-700 hover:bg-red-900 text-red-300 py-2 rounded text-xs border border-gray-600">増税</button>
+                    <button onclick="setPolicy('tax', 'keep')" id="btn-tax-keep" class="ctrl-btn bg-gray-600 text-white py-2 rounded text-xs border border-gray-500 ring-2 ring-blue-400 font-bold">維持</button>
+                    <button onclick="setPolicy('tax', 'down')" id="btn-tax-down" class="ctrl-btn bg-gray-700 hover:bg-green-900 text-green-300 py-2 rounded text-xs border border-gray-600">減税</button>
+                </div>
+                <!-- 社会保障 -->
+                <div class="flex flex-col gap-2">
+                    <div class="text-center text-xs font-bold text-gray-400">社会保障</div>
+                    <button onclick="setPolicy('social', 'up')" id="btn-social-up" class="ctrl-btn bg-gray-700 hover:bg-green-900 text-green-300 py-2 rounded text-xs border border-gray-600">手厚く</button>
+                    <button onclick="setPolicy('social', 'keep')" id="btn-social-keep" class="ctrl-btn bg-gray-600 text-white py-2 rounded text-xs border border-gray-500 ring-2 ring-blue-400 font-bold">維持</button>
+                    <button onclick="setPolicy('social', 'down')" id="btn-social-down" class="ctrl-btn bg-gray-700 hover:bg-red-900 text-red-300 py-2 rounded text-xs border border-gray-600">削減</button>
+                </div>
+                <!-- 金利 -->
+                <div class="flex flex-col gap-2">
+                    <div class="text-center text-xs font-bold text-gray-400">金利</div>
+                    <button onclick="setPolicy('rate', 'up')" id="btn-rate-up" class="ctrl-btn bg-gray-700 hover:bg-blue-900 text-blue-300 py-2 rounded text-xs border border-gray-600">上げる</button>
+                    <button onclick="setPolicy('rate', 'keep')" id="btn-rate-keep" class="ctrl-btn bg-gray-600 text-white py-2 rounded text-xs border border-gray-500 ring-2 ring-blue-400 font-bold">維持</button>
+                    <button onclick="setPolicy('rate', 'down')" id="btn-rate-down" class="ctrl-btn bg-gray-700 hover:bg-orange-900 text-orange-300 py-2 rounded text-xs border border-gray-600">下げる</button>
+                </div>
+            </div>
+
+            <button onclick="executeTurn()" class="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-4 rounded-lg shadow-lg text-lg transition border-b-4 border-blue-800 active:border-0 active:translate-y-1">
+                政策実行 <i class="fas fa-paper-plane ml-2"></i>
+            </button>
+        </div>
+
+        <!-- 結果報告モーダル -->
+        <div id="result-modal" class="hidden absolute inset-0 z-50 bg-black/80 flex items-center justify-center p-6">
+            <div class="bg-white text-gray-800 rounded-xl shadow-2xl w-full max-w-sm overflow-hidden transform transition-all scale-95 opacity-0" id="result-box">
+                <div class="bg-gray-800 text-white p-3 font-bold text-center border-b-4 border-gray-600">
+                    <span id="result-period">第1期</span> 報告
+                </div>
+                <div class="p-6 text-center">
+                    <div class="text-5xl mb-4" id="result-icon">📢</div>
+                    <h3 class="text-xl font-bold mb-2" id="result-title">変化なし</h3>
+                    <p class="text-sm text-gray-600 mb-6 leading-relaxed" id="result-desc">
+                        特に大きな変化は見られませんでした。
+                    </p>
+                    <button onclick="closeResult()" class="w-full bg-gray-800 text-white font-bold py-3 rounded-lg hover:bg-gray-700">
+                        次へ
+                    </button>
+                </div>
+            </div>
+        </div>
+        
+        <!-- ゲームオーバー画面 -->
+        <div id="ending-screen" class="hidden absolute inset-0 z-50 bg-gray-900 flex flex-col items-center justify-center p-6 text-center text-white">
+            <div id="end-icon" class="text-6xl mb-4">💥</div>
+            <h2 id="end-title" class="text-4xl font-bold mb-4">政権崩壊</h2>
+            <p id="end-desc" class="text-gray-400 mb-8 max-w-xs mx-auto">暴動が発生し、官邸が包囲されました。</p>
+            <button onclick="location.reload()" class="bg-white text-gray-900 px-8 py-3 rounded-full font-bold hover:bg-gray-200">
+                最初からやり直す
+            </button>
+        </div>
+
     </div>
-  );
-};
 
-export default App;
+    <script>
+        // --- 設定データ ---
+        const images = {
+            normal: "https://images.unsplash.com/photo-1486406146926-c627a92ad1ab?auto=format&fit=crop&w=800&q=80", // ビル街
+            boom: "https://images.unsplash.com/photo-1444723121867-26b5d62e1698?auto=format&fit=crop&w=800&q=80",   // 華やか
+            slum: "https://images.unsplash.com/photo-1533106958148-dae5338dd895?auto=format&fit=crop&w=800&q=80",   // 路地裏
+            riot: "https://images.unsplash.com/photo-1575517111839-3a3843ee7f5d?auto=format&fit=crop&w=800&q=80"    // 混乱
+        };
+
+        // ゲーム状態 (0-100 scale)
+        let state = {
+            turn: 1,
+            maxTurns: 16,
+            
+            // 内部パラメータ (ユーザーには見えない詳細値)
+            gdp: 50,       // 経済規模 (高すぎると格差拡大)
+            gap: 30,       // 格差 (高いと治安悪化)
+            inflation: 20, // 物価 (高いと支持率低下)
+            
+            // 表示用パラメータ
+            support: 50,   // 支持率 (0でゲームオーバー)
+            economy: 50,   // 景気メーター
+            safety: 80,    // 治安メーター (低いと暴動)
+
+            // 現在の政策選択
+            policy: {
+                tax: 'keep',    // up, keep, down
+                social: 'keep', // up, keep, down
+                rate: 'keep'    // up, keep, down
+            }
+        };
+
+        // DOM Elements
+        const el = (id) => document.getElementById(id);
+        const ui = {
+            bg: el('game-bg'),
+            overlay: el('overlay-layer'),
+            period: el('period-lbl'),
+            turnsLeft: el('turns-left'),
+            supportBar: el('bar-support'),
+            supportVal: el('val-support'),
+            ecoBar: el('bar-economy'),
+            ecoText: el('text-economy'),
+            ecoIcon: el('icon-economy'),
+            safeBar: el('bar-safety'),
+            safeText: el('text-safety'),
+            safeIcon: el('icon-safety'),
+            ticker: el('news-ticker'),
+            secretaryMsg: el('secretary-msg'),
+            secretaryImg: el('secretary-img'),
+            modal: el('result-modal'),
+            resBox: el('result-box'),
+            resPeriod: el('result-period'),
+            resTitle: el('result-title'),
+            resDesc: el('result-desc'),
+            resIcon: el('result-icon'),
+            endScreen: el('ending-screen'),
+            endTitle: el('end-title'),
+            endDesc: el('end-desc'),
+            endIcon: el('end-icon')
+        };
+
+        // 初期化
+        function init() {
+            updateUI();
+        }
+
+        // 政策ボタン選択処理
+        window.setPolicy = (type, val) => {
+            state.policy[type] = val;
+            
+            // ボタンの見た目更新
+            const buttons = ['up', 'keep', 'down'];
+            buttons.forEach(b => {
+                const btn = el(`btn-${type}-${b}`);
+                if (b === val) {
+                    btn.classList.add('ring-2', 'ring-blue-400', 'font-bold');
+                    btn.classList.remove('opacity-50');
+                } else {
+                    btn.classList.remove('ring-2', 'ring-blue-400', 'font-bold');
+                }
+            });
+        };
+
+        // ターン実行（ロジック中枢）
+        window.executeTurn = () => {
+            // 1. 政策の影響計算
+            let diff = { gdp: 0, gap: 0, inflation: 0, support: 0, safety: 0 };
+            let msg = "";
+
+            // 税金 (Tax)
+            if (state.policy.tax === 'up') {
+                diff.gdp -= 5;      // 景気冷える
+                diff.gap -= 5;      // 格差縮小
+                diff.inflation -= 2;
+                diff.support -= 5;  // 不人気
+            } else if (state.policy.tax === 'down') {
+                diff.gdp += 5;      // 景気刺激
+                diff.gap += 5;      // 格差拡大 (金持ち優遇)
+                diff.inflation += 2;
+                diff.support += 5;  // 人気
+            }
+
+            // 社会保障 (Social Security)
+            if (state.policy.social === 'up') {
+                diff.gap -= 10;     // 格差大幅縮小
+                diff.support += 5;  // 人気
+                diff.gdp += 2;      // 消費刺激
+            } else if (state.policy.social === 'down') {
+                diff.gap += 10;     // 格差拡大
+                diff.support -= 10; // 不人気
+                diff.safety -= 5;   // セーフティネット欠如で治安悪化
+            }
+
+            // 金利 (Interest Rate)
+            if (state.policy.rate === 'up') {
+                diff.inflation -= 5;// インフレ抑制
+                diff.gdp -= 3;      // 景気冷える
+            } else if (state.policy.rate === 'down') {
+                diff.inflation += 5;// インフレ加速
+                diff.gdp += 3;      // 景気刺激
+            }
+
+            // 2. 相互作用 (Feedback Loop)
+            
+            // 景気が良すぎると格差が広がる (トリクルダウンしない)
+            if (state.gdp > 70) {
+                diff.gap += 3;
+                msg = "好景気により、一部の富裕層だけが潤っています。";
+            }
+
+            // インフレが高いと支持率と治安が下がる
+            if (state.inflation > 60) {
+                diff.support -= 5;
+                diff.safety -= 3;
+                msg = "物価高騰で国民の生活が苦しくなっています。";
+            }
+
+            // 格差が大きいと治安が悪化する
+            if (state.gap > 60) {
+                diff.safety -= 10;
+                msg = "貧富の差が拡大し、犯罪が増加しています。";
+            } else if (state.gap > 80) {
+                diff.safety -= 20;
+                msg = "格差への怒りが爆発寸前です！";
+            }
+
+            // 3. パラメータ適用 & クランプ
+            state.gdp = clamp(state.gdp + diff.gdp + rand(-2, 2));
+            state.gap = clamp(state.gap + diff.gap + rand(-1, 1));
+            state.inflation = clamp(state.inflation + diff.inflation + rand(-1, 1));
+            state.support = clamp(state.support + diff.support + rand(-1, 1));
+            
+            // 治安は格差の影響を強く受ける
+            let safetyTarget = 100 - state.gap; 
+            state.safety = clamp(state.safety * 0.8 + safetyTarget * 0.2 + diff.safety); // 徐々にターゲットへ
+
+            // 4. 表示パラメータへの変換
+            state.economy = state.gdp; // そのまま
+
+            // 結果表示準備
+            showResult(msg, diff);
+        };
+
+        function clamp(val) { return Math.max(0, Math.min(100, val)); }
+        function rand(min, max) { return Math.floor(Math.random() * (max - min + 1)) + min; }
+
+        // 結果モーダル表示
+        function showResult(systemMsg, diff) {
+            ui.modal.classList.remove('hidden');
+            setTimeout(() => {
+                ui.resBox.classList.remove('scale-95', 'opacity-0');
+                ui.resBox.classList.add('scale-100', 'opacity-100');
+            }, 50);
+
+            ui.resPeriod.textContent = `第${state.turn}期`;
+            
+            // 状況判定によるタイトルとアイコン
+            let title = "現状維持";
+            let icon = "😐";
+            let desc = systemMsg || "特筆すべき変化はありません。";
+
+            if (state.safety < 30) {
+                title = "治安悪化！"; icon = "🔥"; desc = "暴動のリスクが高まっています！格差是正が必要です。";
+            } else if (state.economy > 80) {
+                title = "バブル景気"; icon = "💸"; desc = "景気は最高潮ですが、格差も広がっています。";
+            } else if (state.economy < 20) {
+                title = "深刻な不況"; icon = "📉"; desc = "失業者が溢れています。景気対策が必要です。";
+            } else if (state.support > 80) {
+                title = "圧倒的支持"; icon = "💖"; desc = "国民はあなたの政策を熱烈に支持しています。";
+            }
+
+            ui.resTitle.textContent = title;
+            ui.resIcon.textContent = icon;
+            ui.resDesc.textContent = desc;
+        }
+
+        // 次のターンへ
+        window.closeResult = () => {
+            ui.resBox.classList.add('scale-95', 'opacity-0');
+            setTimeout(() => ui.modal.classList.add('hidden'), 200);
+
+            // ゲームオーバー判定
+            if (state.support <= 0) {
+                endGame("解散総選挙", "支持率低下により、選挙で大敗しました。", "🗳️");
+                return;
+            }
+            if (state.safety <= 0) {
+                endGame("暴動発生", "怒れる群衆が官邸に押し寄せ、政権は転覆しました。", "🔥");
+                return;
+            }
+            if (state.turn >= state.maxTurns) {
+                endGame("任期満了", "激動の時代を乗り越え、任期を全うしました。", "🎉");
+                return;
+            }
+
+            state.turn++;
+            updateUI();
+        };
+
+        // UI更新
+        function updateUI() {
+            ui.period.textContent = `第${state.turn}期`;
+            ui.turnsLeft.textContent = state.maxTurns - state.turn + 1;
+
+            // バー更新
+            ui.supportBar.style.width = `${state.support}%`;
+            ui.supportVal.textContent = `${Math.round(state.support)}%`;
+
+            ui.ecoBar.style.width = `${state.economy}%`;
+            
+            // 治安バー（低いと危険）
+            ui.safeBar.style.width = `${state.safety}%`;
+            if (state.safety < 30) ui.safeBar.classList.replace('bg-blue-500', 'bg-red-600');
+            else ui.safeBar.classList.replace('bg-red-600', 'bg-blue-500');
+
+            // 状態テキストとアイコン、背景、ニュース更新
+            updateAtmosphere();
+        }
+
+        function updateAtmosphere() {
+            // 景気
+            let ecoTxt = "普通"; let ecoIcon = "fas fa-cloud"; let ecoColor = "text-gray-400";
+            if (state.economy > 70) { ecoTxt = "好景気"; ecoIcon = "fas fa-sun"; ecoColor = "text-orange-400"; }
+            else if (state.economy < 30) { ecoTxt = "不況"; ecoIcon = "fas fa-snowflake"; ecoColor = "text-blue-300"; }
+            ui.ecoText.textContent = ecoTxt;
+            ui.ecoText.className = ecoColor;
+            ui.ecoBar.className = `meter-fill ${state.economy > 70 ? 'bg-orange-400' : (state.economy < 30 ? 'bg-blue-300' : 'bg-green-500')}`;
+            ui.ecoIcon.innerHTML = `<i class="${ecoIcon} ${ecoColor}"></i>`;
+
+            // 治安
+            let safeTxt = "安全"; let safeColor = "text-blue-400";
+            if (state.safety < 50) { safeTxt = "不安"; safeColor = "text-yellow-400"; }
+            if (state.safety < 20) { safeTxt = "危険"; safeColor = "text-red-500 animate-pulse"; }
+            ui.safeText.textContent = safeTxt;
+            ui.safeText.className = safeColor;
+            
+            // ニュースと背景
+            let news = "";
+            let bgUrl = images.normal;
+            let overlayColor = "transparent";
+
+            if (state.safety < 30) {
+                news = "【緊急】各地でデモが発生。治安部隊が出動中。";
+                bgUrl = images.riot;
+                overlayColor = "rgba(100, 0, 0, 0.4)"; // 赤黒いフィルター
+                ui.secretaryMsg.textContent = "総理！外を見てください、暴動です！格差是正を急いでください！";
+                ui.secretaryImg.classList.add('anim-panic');
+            } else if (state.economy > 80) {
+                news = "株価最高値更新。高級マンションが即日完売。";
+                bgUrl = images.boom;
+                ui.secretaryMsg.textContent = "景気は絶好調ですが、持たざる者たちの不満が溜まっています。";
+                ui.secretaryImg.classList.remove('anim-panic');
+            } else if (state.economy < 20) {
+                news = "失業率が悪化。炊き出しに長蛇の列。";
+                bgUrl = images.slum;
+                ui.secretaryMsg.textContent = "不況が深刻です。減税や給付金で国民を救ってください。";
+                ui.secretaryImg.classList.add('anim-panic');
+            } else {
+                news = "穏やかな日常。特に大きなニュースはありません。";
+                ui.secretaryMsg.textContent = "今のところ順調です。このバランスを維持しましょう。";
+                ui.secretaryImg.classList.remove('anim-panic');
+            }
+
+            ui.ticker.textContent = news;
+            ui.bg.style.backgroundImage = `url('${bgUrl}')`;
+            ui.overlay.style.backgroundColor = overlayColor;
+        }
+
+        // ゲーム終了処理
+        function endGame(title, desc, icon) {
+            ui.endScreen.classList.remove('hidden');
+            ui.endTitle.textContent = title;
+            ui.endDesc.textContent = desc;
+            ui.endIcon.textContent = icon;
+        }
+
+        // 開始
+        init();
+
+    </script>
+</body>
+</html>
