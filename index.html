@@ -1,407 +1,482 @@
-<!DOCTYPE html>
-<html lang="ja">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Economy Sim Lite - HTML Version</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://unpkg.com/lucide@latest"></script>
-    <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700;900&display=swap');
-        body { font-family: 'Inter', sans-serif; }
-        .custom-scrollbar::-webkit-scrollbar { width: 4px; }
-        .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
-        .custom-scrollbar::-webkit-scrollbar-thumb { background: #e2e8f0; border-radius: 10px; }
-        input[type=range]::-webkit-slider-thumb {
-            -webkit-appearance: none;
-            height: 18px;
-            width: 18px;
-            border-radius: 50%;
-            background: white;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.15);
-            border: 2px solid #3b82f6;
-            cursor: pointer;
-            margin-top: -6px;
-        }
-        input[type=range]::-webkit-slider-runnable-track {
-            width: 100%;
-            height: 6px;
-            cursor: pointer;
-            background: #f1f5f9;
-            border-radius: 3px;
-        }
-    </style>
-</head>
-<body class="bg-slate-50 text-slate-900 p-4 md:p-8">
-    <div class="max-w-6xl mx-auto">
-        <!-- Header -->
-        <header class="flex flex-col md:flex-row md:items-center justify-between mb-8 gap-4">
+import React, { useState, useEffect, useMemo } from 'react';
+import { 
+  TrendingUp, 
+  TrendingDown, 
+  Users, 
+  Activity, 
+  AlertTriangle, 
+  CheckCircle2, 
+  Info,
+  ChevronRight,
+  RefreshCw,
+  Building2,
+  Coins,
+  Flame,
+  Sun
+} from 'lucide-react';
+
+/**
+ * Economy Sim Lite - 国民の声 -
+ * A high-fidelity economic simulation based on 2SLS structural equations.
+ */
+
+const MAX_TURNS = 16;
+const INITIAL_VALUES = {
+  turn: 1,
+  support: 50.0,
+  economy: 50.0, // Visual meter 0-100
+  safety: 80.0,
+  // Economic Variables
+  C: 155000,     // Consumption
+  I: 25000,      // Investment
+  G: 40000,      // Gov Spending (Fixed)
+  Def: 100.0,    // GDP Deflator
+  ShortRate: 0.1,
+  Tax: 40000,    // Initial Tax amount
+  NominalIncome: 180000, // Fixed nominal income as per specs
+  GDP: 220000,   // C + I + G
+  PrevGDP: 220000,
+  PrevI: 25000,
+  PrevC: 155000,
+  PrevDef: 100.0,
+  PrevDispo: 1400.0, // (Nominal - Tax) / (Def/100)
+};
+
+const App = () => {
+  // --- Game State ---
+  const [gameState, setGameState] = useState(INITIAL_VALUES);
+  const [policy, setPolicy] = useState({ tax: 'maintain', rate: 'maintain' });
+  const [history, setHistory] = useState([]);
+  const [showModal, setShowModal] = useState(false);
+  const [gameOver, setGameOver] = useState(null); // 'win', 'lose_support', 'lose_safety'
+  const [lastTurnReport, setLastTurnReport] = useState(null);
+
+  // --- Calculations ---
+  const processTurn = () => {
+    const s = { ...gameState };
+    
+    // 1. Update Policy values
+    let currentShortRate = s.ShortRate;
+    if (policy.rate === 'up') currentShortRate += 0.5;
+    if (policy.rate === 'down') currentShortRate = Math.max(0.01, currentShortRate - 0.5);
+
+    let currentTax = s.Tax;
+    if (policy.tax === 'up') currentTax += 2000;
+    if (policy.tax === 'down') currentTax = Math.max(10000, currentTax - 2000);
+
+    // 2. Economic Structural Equations (4.1)
+    // Long Rate propagation
+    const longRate = 1.2057 + 0.4924 * currentShortRate;
+
+    // Investment Function
+    const newI = 5875.2 - 24.170 * longRate + 0.9508 * s.PrevI;
+
+    // Consumption Function
+    // Using current disposable income: NominalIncome - currentTax
+    const disposableIncome = s.NominalIncome - currentTax;
+    const newC = 9398.9 + 0.0216 * disposableIncome + 0.9331 * s.PrevC;
+
+    // GDP
+    const newGDP = newC + newI + s.G;
+
+    // Deflator (Inflation)
+    const newDef = -0.7073 + 1.0033 * s.PrevDef + 0.0000008149 * newGDP;
+
+    // 3. Real Disposable Income (4.2)
+    const realDispo = disposableIncome / (newDef / 100);
+
+    // 4. Growth Rates for Scoring (4.3)
+    const growthGDP = ((newGDP - s.GDP) / s.GDP) * 100;
+    const growthI = ((newI - s.I) / s.I) * 100;
+    const growthDispo = ((realDispo - s.PrevDispo) / s.PrevDispo) * 100;
+    const inflationRate = ((newDef - s.PrevDef) / s.PrevDef) * 100;
+
+    // 5. Support Score Delta (4.3.1)
+    // ΔScore = w1*Growth(Dispo) + w2*Growth(I) + w4*Growth(GDP) - w3*Inflation
+    const w1 = 10.0, w2 = 15.0, w3 = 50.0, w4 = 10.0;
+    const deltaScore = (w1 * growthDispo) + (w2 * growthI) + (w4 * growthGDP) - (w3 * (inflationRate - 0.1));
+
+    const newSupport = Math.max(0, Math.min(100, s.support + deltaScore));
+    
+    // 6. Visual Economy Meter (derived from GDP growth and inflation balance)
+    const economyHealth = Math.max(0, Math.min(100, 50 + (growthGDP * 5) - (inflationRate * 2)));
+
+    // 7. Safety Calculation (Abstracted: drops if support or economy is very low)
+    let safetyDelta = 0;
+    if (newSupport < 30) safetyDelta -= 5;
+    if (economyHealth < 20) safetyDelta -= 10;
+    if (inflationRate > 2.0) safetyDelta -= 3;
+    if (newSupport > 60 && economyHealth > 40) safetyDelta += 2;
+    const newSafety = Math.max(0, Math.min(100, s.safety + safetyDelta));
+
+    // Update State
+    const nextState = {
+      ...s,
+      turn: s.turn + 1,
+      support: newSupport,
+      economy: economyHealth,
+      safety: newSafety,
+      C: newC,
+      I: newI,
+      Def: newDef,
+      ShortRate: currentShortRate,
+      Tax: currentTax,
+      GDP: newGDP,
+      PrevGDP: s.GDP,
+      PrevI: s.I,
+      PrevC: s.C,
+      PrevDef: s.Def,
+      PrevDispo: realDispo
+    };
+
+    setLastTurnReport({
+      deltaScore,
+      inflationRate,
+      growthGDP,
+      growthDispo,
+      growthI
+    });
+
+    setGameState(nextState);
+    setHistory([...history, nextState]);
+    setShowModal(true);
+
+    // Check Endings
+    if (newSupport <= 0) setGameOver('lose_support');
+    else if (newSafety <= 0) setGameOver('lose_safety');
+    else if (nextState.turn > MAX_TURNS) setGameOver('win');
+  };
+
+  const resetGame = () => {
+    setGameState(INITIAL_VALUES);
+    setPolicy({ tax: 'maintain', rate: 'maintain' });
+    setHistory([]);
+    setGameOver(null);
+    setShowModal(false);
+  };
+
+  // --- Dynamic Assets ---
+  const getBackgroundInfo = () => {
+    if (gameState.safety < 30) return { 
+      label: '暴動', 
+      icon: <Flame className="w-12 h-12 text-red-500 animate-pulse" />, 
+      bg: 'bg-red-950', 
+      overlay: 'bg-red-900/40',
+      text: '街の一部でデモが発生し、火の手が上がっています。'
+    };
+    if (gameState.economy > 80) return { 
+      label: '好景気', 
+      icon: <Sun className="w-12 h-12 text-yellow-400 animate-bounce" />, 
+      bg: 'bg-blue-900', 
+      overlay: 'bg-yellow-400/10',
+      text: '高層ビルが立ち並び、街は活気に満ち溢れています。'
+    };
+    if (gameState.economy < 20) return { 
+      label: '不況', 
+      icon: <Building2 className="w-12 h-12 text-slate-600" />, 
+      bg: 'bg-slate-900', 
+      overlay: 'bg-blue-900/30',
+      text: 'シャッターを下ろした店が目立ち、人影もまばらです。'
+    };
+    return { 
+      label: '通常', 
+      icon: <Building2 className="w-12 h-12 text-blue-400" />, 
+      bg: 'bg-indigo-950', 
+      overlay: '',
+      text: '穏やかな平日の街並みです。'
+    };
+  };
+
+  const getSecretaryDialogue = () => {
+    if (gameState.safety < 30 || gameState.support < 20) return { 
+      mood: 'Panic', 
+      msg: '総理！国民の怒りが頂点に達しています！早急な対策を！' 
+    };
+    if (gameState.economy > 70 && gameState.support > 60) return { 
+      mood: 'Joy', 
+      msg: '素晴らしい！政権への期待感が高まっていますよ！' 
+    };
+    if (lastTurnReport?.inflationRate > 1.5) return { 
+      mood: 'Worry', 
+      msg: '物価上昇が止まりません。減税よりも利上げを検討すべきでは？' 
+    };
+    return { 
+      mood: 'Normal', 
+      msg: '現在の経済状況を報告します。次の施策を決定してください。' 
+    };
+  };
+
+  const bg = getBackgroundInfo();
+  const dialogue = getSecretaryDialogue();
+
+  return (
+    <div className={`min-h-screen flex flex-col font-sans text-white transition-colors duration-1000 ${bg.bg}`}>
+      
+      {/* HEADER AREA */}
+      <header className="p-4 bg-black/40 backdrop-blur-md border-b border-white/10 sticky top-0 z-10">
+        <div className="max-w-md mx-auto flex flex-col gap-3">
+          <div className="flex justify-between items-end">
             <div>
-                <h1 class="text-3xl font-black text-slate-800 tracking-tight">Economy Sim <span class="text-blue-600">Lite</span></h1>
-                <p class="text-slate-500 font-medium">国家経済シミュレーション Ver 2.0 (HTML)</p>
+              <h1 className="text-xs font-bold text-blue-400 tracking-widest uppercase">Economy Sim Lite</h1>
+              <div className="text-xl font-bold flex items-center gap-2">
+                就任 {gameState.turn}期目
+                <span className="text-xs text-white/50 font-normal">あと {MAX_TURNS - gameState.turn + 1}期</span>
+              </div>
             </div>
-            <div class="flex items-center gap-4 bg-white px-6 py-3 rounded-2xl shadow-sm border border-slate-100">
-                <div class="text-center border-r border-slate-100 pr-4">
-                    <p class="text-[10px] text-slate-400 uppercase font-bold">現在の年度</p>
-                    <p id="stat-year" class="text-xl font-bold text-blue-600">2024</p>
-                </div>
-                <div class="text-center">
-                    <p class="text-[10px] text-slate-400 uppercase font-bold">予算収支</p>
-                    <p id="stat-balance" class="text-xl font-bold text-rose-500">-10.0 <span class="text-xs">兆円</span></p>
-                </div>
+            <div className="text-right">
+              <div className="text-xs text-white/60">社会秩序</div>
+              <div className="text-sm font-mono">{gameState.safety.toFixed(1)}%</div>
             </div>
-        </header>
+          </div>
 
-        <!-- Main Stats Grid -->
-        <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
-            <!-- GDP -->
-            <div class="bg-white p-4 rounded-xl shadow-sm border border-slate-100 flex flex-col justify-between">
-                <div class="flex items-center justify-between mb-2">
-                    <div class="p-2 rounded-lg bg-blue-500 bg-opacity-10 text-blue-600"><i data-lucide="trending-up"></i></div>
-                    <span id="trend-gdp" class="text-xs font-bold text-emerald-500">0.0%</span>
-                </div>
-                <div>
-                    <p class="text-slate-500 text-xs font-medium uppercase tracking-wider">国内総生産 (GDP)</p>
-                    <p class="text-2xl font-bold text-slate-800"><span id="stat-gdp">500</span><span class="text-sm font-normal text-slate-400 ml-1">兆円</span></p>
-                </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-1">
+              <div className="flex justify-between text-[10px] uppercase font-bold tracking-tighter">
+                <span className="flex items-center gap-1"><Users size={12}/> Support</span>
+                <span>{gameState.support.toFixed(1)}%</span>
+              </div>
+              <div className="h-3 w-full bg-white/10 rounded-full overflow-hidden border border-white/5">
+                <div 
+                  className={`h-full transition-all duration-1000 ${gameState.support < 30 ? 'bg-red-500' : 'bg-pink-500'}`}
+                  style={{ width: `${gameState.support}%` }}
+                />
+              </div>
             </div>
-            <!-- Inflation -->
-            <div class="bg-white p-4 rounded-xl shadow-sm border border-slate-100 flex flex-col justify-between">
-                <div class="flex items-center justify-between mb-2">
-                    <div class="p-2 rounded-lg bg-orange-500 bg-opacity-10 text-orange-600"><i data-lucide="activity"></i></div>
-                </div>
-                <div>
-                    <p class="text-slate-500 text-xs font-medium uppercase tracking-wider">インフレ率</p>
-                    <p class="text-2xl font-bold text-slate-800"><span id="stat-inflation">2.0</span><span class="text-sm font-normal text-slate-400 ml-1">%</span></p>
-                </div>
+            <div className="space-y-1">
+              <div className="flex justify-between text-[10px] uppercase font-bold tracking-tighter">
+                <span className="flex items-center gap-1"><Activity size={12}/> Economy</span>
+                <span>{gameState.economy.toFixed(1)}%</span>
+              </div>
+              <div className="h-3 w-full bg-white/10 rounded-full overflow-hidden border border-white/5 relative">
+                <div 
+                  className="h-full bg-blue-500 transition-all duration-1000"
+                  style={{ width: `${gameState.economy}%` }}
+                />
+                <div className="absolute top-0 right-0 w-[20%] h-full bg-red-500/30 border-l border-red-500/50" />
+              </div>
             </div>
-            <!-- Unemployment -->
-            <div class="bg-white p-4 rounded-xl shadow-sm border border-slate-100 flex flex-col justify-between">
-                <div class="flex items-center justify-between mb-2">
-                    <div class="p-2 rounded-lg bg-indigo-500 bg-opacity-10 text-indigo-600"><i data-lucide="users"></i></div>
-                </div>
-                <div>
-                    <p class="text-slate-500 text-xs font-medium uppercase tracking-wider">失業率</p>
-                    <p class="text-2xl font-bold text-slate-800"><span id="stat-unemployment">4.5</span><span class="text-sm font-normal text-slate-400 ml-1">%</span></p>
-                </div>
-            </div>
-            <!-- Approval -->
-            <div class="bg-white p-4 rounded-xl shadow-sm border border-slate-100 flex flex-col justify-between">
-                <div class="flex items-center justify-between mb-2">
-                    <div class="p-2 rounded-lg bg-rose-500 bg-opacity-10 text-rose-600"><i data-lucide="heart"></i></div>
-                </div>
-                <div>
-                    <p class="text-slate-500 text-xs font-medium uppercase tracking-wider">国民支持率</p>
-                    <p class="text-2xl font-bold text-slate-800"><span id="stat-approval">50</span><span class="text-sm font-normal text-slate-400 ml-1">%</span></p>
-                </div>
-            </div>
+          </div>
+        </div>
+      </header>
+
+      {/* MAIN AREA (VISUALS) */}
+      <main className="flex-1 relative overflow-hidden flex flex-col items-center justify-center p-6">
+        {/* Dynamic Background Overlay */}
+        <div className={`absolute inset-0 transition-colors duration-1000 ${bg.overlay}`} />
+        
+        {/* News Ticker */}
+        <div className="absolute top-8 w-full bg-black/60 py-1 border-y border-white/5 overflow-hidden">
+          <div className="whitespace-nowrap animate-marquee flex items-center gap-8">
+            <span className="text-xs font-bold text-yellow-400">【速報】</span>
+            <span className="text-xs">
+              {gameState.support < 30 ? '支持率急落により内閣不信任案の噂も' : 
+               gameState.economy > 80 ? '史上空前の好景気、株価は最高値を更新' :
+               gameState.economy < 30 ? '実体経済の冷え込み深刻、倒産件数が増加' :
+               '本日の閣議決定に基づき、新たな経済政策が施行されます'}
+            </span>
+            <span className="opacity-50">|</span>
+            <span className="text-xs">
+              {gameState.Def > 105 ? '物価高騰に悲鳴「卵が1個100円」' : '政府、デフレ脱却を宣言'}
+            </span>
+          </div>
         </div>
 
-        <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
-            <!-- Controls Panel -->
-            <div class="lg:col-span-2 space-y-6">
-                <div class="bg-white p-6 rounded-3xl shadow-sm border border-slate-100">
-                    <div class="flex items-center gap-2 mb-6">
-                        <i data-lucide="chevron-right" class="text-blue-600"></i>
-                        <h2 class="text-lg font-bold">政策決定パネル</h2>
-                    </div>
-
-                    <!-- Tax Policy -->
-                    <div class="mb-8">
-                        <div class="flex justify-between items-end mb-3">
-                            <label class="font-bold text-slate-700 flex items-center gap-2">所得・法人税率</label>
-                            <span id="val-taxRate" class="text-2xl font-black text-blue-600">20%</span>
-                        </div>
-                        <input type="range" id="input-taxRate" min="5" max="50" step="1" value="20" class="w-full h-2 bg-slate-100 rounded-lg appearance-none cursor-pointer accent-blue-600">
-                    </div>
-
-                    <!-- Budget Allocation -->
-                    <div class="space-y-6">
-                        <label class="font-bold text-slate-700 block mb-4">歳入予算の配分 (%)</label>
-                        
-                        <div class="flex flex-col gap-2">
-                            <div class="flex justify-between text-sm font-medium">
-                                <span class="flex items-center gap-2 text-slate-600"><i data-lucide="heart" size="16"></i> 社会保障・福祉</span>
-                                <span id="val-welfare" class="font-bold">30%</span>
-                            </div>
-                            <input type="range" id="input-welfare" min="0" max="50" step="1" value="30" class="w-full h-1.5 bg-slate-100 rounded-lg appearance-none cursor-pointer accent-rose-500">
-                        </div>
-
-                        <div class="flex flex-col gap-2">
-                            <div class="flex justify-between text-sm font-medium">
-                                <span class="flex items-center gap-2 text-slate-600"><i data-lucide="book-open" size="16"></i> 教育・科学技術</span>
-                                <span id="val-education" class="font-bold">20%</span>
-                            </div>
-                            <input type="range" id="input-education" min="0" max="50" step="1" value="20" class="w-full h-1.5 bg-slate-100 rounded-lg appearance-none cursor-pointer accent-indigo-500">
-                        </div>
-
-                        <div class="flex flex-col gap-2">
-                            <div class="flex justify-between text-sm font-medium">
-                                <span class="flex items-center gap-2 text-slate-600"><i data-lucide="construction" size="16"></i> インフラ・公共事業</span>
-                                <span id="val-infrastructure" class="font-bold">25%</span>
-                            </div>
-                            <input type="range" id="input-infrastructure" min="0" max="50" step="1" value="25" class="w-full h-1.5 bg-slate-100 rounded-lg appearance-none cursor-pointer accent-emerald-500">
-                        </div>
-
-                        <div class="flex flex-col gap-2">
-                            <div class="flex justify-between text-sm font-medium">
-                                <span class="flex items-center gap-2 text-slate-600"><i data-lucide="shield" size="16"></i> 国防・安全保障</span>
-                                <span id="val-defense" class="font-bold">15%</span>
-                            </div>
-                            <input type="range" id="input-defense" min="0" max="50" step="1" value="15" class="w-full h-1.5 bg-slate-100 rounded-lg appearance-none cursor-pointer accent-slate-700">
-                        </div>
-                    </div>
-
-                    <div class="mt-8 pt-6 border-t border-slate-50">
-                        <button id="btn-next-year" class="w-full bg-slate-900 text-white py-4 rounded-2xl font-bold hover:bg-blue-600 transition-all active:scale-95 flex items-center justify-center gap-2 shadow-lg">
-                            次の年度へ進行 (Next Year)
-                        </button>
-                    </div>
-                </div>
-
-                <!-- GDP Chart -->
-                <div class="bg-white p-6 rounded-3xl shadow-sm border border-slate-100">
-                    <h3 class="font-bold mb-4 text-slate-700">GDP推移 (直近10年)</h3>
-                    <div id="chart-container" class="h-32 w-full flex items-end gap-1 px-2">
-                        <!-- Bars will be generated here -->
-                    </div>
-                    <div class="flex justify-between mt-2 text-[10px] text-slate-400 font-bold px-2">
-                        <span id="chart-start-year">2024</span>
-                        <span id="chart-end-year">2024</span>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Sidebar -->
-            <div class="space-y-6">
-                <div class="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 h-full flex flex-col">
-                    <h3 class="font-bold text-slate-700 flex items-center gap-2 mb-4">
-                        <i data-lucide="alert-circle" class="text-orange-500"></i> 活動・イベントログ
-                    </h3>
-                    <div id="log-container" class="flex-1 space-y-3 overflow-y-auto max-h-[400px] pr-2 custom-scrollbar text-xs leading-relaxed">
-                        <!-- Logs will be added here -->
-                    </div>
-                    <div class="mt-6 pt-6 border-t border-slate-50">
-                        <div class="flex justify-between items-center text-sm font-bold mb-2">
-                            <span class="text-slate-500">国家債務残高</span>
-                            <span id="stat-debt" class="text-slate-800">1000.0 <span class="text-[10px]">兆円</span></span>
-                        </div>
-                        <div class="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
-                            <div id="debt-progress" class="h-full bg-emerald-500 transition-all" style="width: 25%"></div>
-                        </div>
-                        <p class="text-[10px] text-slate-400 mt-1 text-right italic">対GDP比上限 500%</p>
-                    </div>
-                </div>
-            </div>
+        {/* Central Visual */}
+        <div className="z-0 opacity-50 absolute inset-0 flex items-center justify-center">
+            {bg.icon}
         </div>
-    </div>
 
-    <!-- Game Over Modal -->
-    <div id="game-over-modal" class="hidden fixed inset-0 bg-slate-900/80 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-        <div class="bg-white rounded-3xl p-8 max-w-md w-full text-center shadow-2xl">
-            <div class="w-20 h-20 bg-rose-100 text-rose-600 rounded-full flex items-center justify-center mx-auto mb-6">
-                <i data-lucide="alert-circle" size="40"></i>
+        {/* Secretary Character Area */}
+        <div className="relative mt-auto w-full max-w-sm flex items-end">
+          <div className="bg-black/60 backdrop-blur-lg p-4 rounded-2xl border border-white/10 mb-8 w-full shadow-2xl">
+            <div className="flex gap-4 items-start">
+              <div className={`w-12 h-12 rounded-full bg-blue-500/20 flex-shrink-0 flex items-center justify-center border border-blue-400/30 ${dialogue.mood === 'Panic' ? 'animate-bounce' : ''}`}>
+                <span className="text-2xl">{dialogue.mood === 'Panic' ? '😨' : dialogue.mood === 'Joy' ? '😊' : '📋'}</span>
+              </div>
+              <div>
+                <div className="text-[10px] text-blue-400 font-bold mb-1 uppercase tracking-widest">首席秘書官官</div>
+                <p className="text-sm leading-relaxed">{dialogue.msg}</p>
+              </div>
             </div>
-            <h2 class="text-2xl font-black mb-4">ゲームオーバー</h2>
-            <p id="game-over-message" class="text-slate-600 mb-8 font-medium"></p>
-            <button onclick="window.location.reload()" class="w-full bg-blue-600 text-white py-4 rounded-2xl font-bold hover:bg-blue-700 transition-all">
-                最初からやり直す
+          </div>
+        </div>
+      </main>
+
+      {/* FOOTER AREA (CONTROLS) */}
+      <footer className="p-6 bg-slate-950/90 backdrop-blur-xl border-t border-white/10 rounded-t-[2rem] shadow-[0_-10px_40px_rgba(0,0,0,0.5)]">
+        <div className="max-w-md mx-auto space-y-6">
+          <div className="grid grid-cols-2 gap-4">
+            {/* Tax Control */}
+            <div className="space-y-2">
+              <label className="text-[10px] font-bold text-white/40 uppercase flex items-center gap-1">
+                <Coins size={12}/> 税金設定
+              </label>
+              <div className="grid grid-cols-1 gap-1">
+                {['up', 'maintain', 'down'].map((type) => (
+                  <button
+                    key={type}
+                    onClick={() => setPolicy({...policy, tax: type})}
+                    className={`py-2 px-3 rounded-lg text-xs font-bold transition-all border ${
+                      policy.tax === type 
+                      ? 'bg-blue-600 border-blue-400 shadow-[0_0_15px_rgba(37,99,235,0.4)] scale-[1.02]' 
+                      : 'bg-white/5 border-white/10 text-white/50 hover:bg-white/10'
+                    }`}
+                  >
+                    {type === 'up' ? '増税' : type === 'down' ? '減税' : '現状維持'}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Interest Rate Control */}
+            <div className="space-y-2">
+              <label className="text-[10px] font-bold text-white/40 uppercase flex items-center gap-1">
+                <TrendingUp size={12}/> 金利設定 (短期)
+              </label>
+              <div className="grid grid-cols-1 gap-1">
+                {['up', 'maintain', 'down'].map((type) => (
+                  <button
+                    key={type}
+                    onClick={() => setPolicy({...policy, rate: type})}
+                    className={`py-2 px-3 rounded-lg text-xs font-bold transition-all border ${
+                      policy.rate === type 
+                      ? 'bg-indigo-600 border-indigo-400 shadow-[0_0_15px_rgba(79,70,229,0.4)] scale-[1.02]' 
+                      : 'bg-white/5 border-white/10 text-white/50 hover:bg-white/10'
+                    }`}
+                  >
+                    {type === 'up' ? '利上げ' : type === 'down' ? '利下げ' : '現状維持'}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <button
+            onClick={processTurn}
+            disabled={!!gameOver}
+            className="w-full py-4 bg-gradient-to-r from-blue-600 to-indigo-600 rounded-xl font-bold flex items-center justify-center gap-2 shadow-lg hover:brightness-110 active:scale-95 transition-all"
+          >
+            政策を実行する <ChevronRight size={18}/>
+          </button>
+        </div>
+      </footer>
+
+      {/* TURN RESULT MODAL */}
+      {showModal && !gameOver && lastTurnReport && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-6 bg-black/80 backdrop-blur-sm">
+          <div className="bg-slate-900 border border-white/20 rounded-3xl w-full max-w-sm overflow-hidden shadow-2xl animate-in zoom-in duration-300">
+            <div className="p-6 border-b border-white/10 bg-white/5">
+              <h2 className="text-xl font-bold flex items-center gap-2">
+                <Info className="text-blue-400"/> 第{gameState.turn - 1}期 報告書
+              </h2>
+            </div>
+            <div className="p-6 space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div className="bg-white/5 p-3 rounded-xl border border-white/5">
+                  <div className="text-[10px] text-white/40 font-bold mb-1 uppercase">GDP成長率</div>
+                  <div className={`text-lg font-mono flex items-center gap-1 ${lastTurnReport.growthGDP >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                    {lastTurnReport.growthGDP >= 0 ? '+' : ''}{lastTurnReport.growthGDP.toFixed(2)}%
+                    {lastTurnReport.growthGDP >= 0 ? <TrendingUp size={16}/> : <TrendingDown size={16}/>}
+                  </div>
+                </div>
+                <div className="bg-white/5 p-3 rounded-xl border border-white/5">
+                  <div className="text-[10px] text-white/40 font-bold mb-1 uppercase">インフレ率</div>
+                  <div className={`text-lg font-mono ${lastTurnReport.inflationRate > 0.5 ? 'text-orange-400 font-bold' : 'text-blue-300'}`}>
+                    {lastTurnReport.inflationRate.toFixed(2)}%
+                  </div>
+                </div>
+              </div>
+              
+              <div className="space-y-1">
+                <div className="text-xs text-white/60 mb-1">実質可処分所得の変化</div>
+                <div className="h-2 w-full bg-white/10 rounded-full overflow-hidden">
+                  <div 
+                    className={`h-full transition-all duration-1000 ${lastTurnReport.growthDispo >= 0 ? 'bg-green-500' : 'bg-red-500'}`}
+                    style={{ width: `${Math.min(100, Math.abs(lastTurnReport.growthDispo) * 10 + 10)}%`, marginLeft: lastTurnReport.growthDispo < 0 ? 'auto' : '0' }}
+                  />
+                </div>
+                <div className="text-[10px] text-right text-white/40 italic">
+                  物価高により手取りが {lastTurnReport.growthDispo < 0 ? '減少' : '増加'}
+                </div>
+              </div>
+
+              <div className="p-3 bg-blue-500/10 border border-blue-500/20 rounded-xl">
+                <div className="text-[10px] text-blue-400 font-bold mb-1 uppercase tracking-widest">支持率への影響</div>
+                <div className={`text-xl font-bold ${lastTurnReport.deltaScore >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                   {lastTurnReport.deltaScore >= 0 ? '+' : ''}{lastTurnReport.deltaScore.toFixed(1)} pt
+                </div>
+              </div>
+            </div>
+            <button
+              onClick={() => setShowModal(false)}
+              className="w-full py-4 bg-blue-600 font-bold hover:bg-blue-500 transition-colors"
+            >
+              次期へ進む
             </button>
+          </div>
         </div>
-    </div>
+      )}
 
-    <script>
-        // --- Game State ---
-        let state = {
-            year: 2024,
-            gdp: 500,
-            inflation: 2.0,
-            unemployment: 4.5,
-            approval: 50,
-            debt: 1000,
-            history: [{ year: 2024, gdp: 500, approval: 50, inflation: 2.0 }],
-            policies: {
-                taxRate: 20,
-                spending: {
-                    welfare: 30,
-                    education: 20,
-                    infrastructure: 25,
-                    defense: 15
-                }
-            },
-            logs: [{ type: 'info', message: '新政権が発足しました。経済を安定させ、成長に導いてください。' }],
-            gameOver: false
-        };
-
-        // --- DOM Elements ---
-        const elements = {
-            year: document.getElementById('stat-year'),
-            balance: document.getElementById('stat-balance'),
-            gdp: document.getElementById('stat-gdp'),
-            trendGdp: document.getElementById('trend-gdp'),
-            inflation: document.getElementById('stat-inflation'),
-            unemployment: document.getElementById('stat-unemployment'),
-            approval: document.getElementById('stat-approval'),
-            debt: document.getElementById('stat-debt'),
-            debtProgress: document.getElementById('debt-progress'),
-            logContainer: document.getElementById('log-container'),
-            chartContainer: document.getElementById('chart-container'),
-            chartStart: document.getElementById('chart-start-year'),
-            chartEnd: document.getElementById('chart-end-year'),
-            modal: document.getElementById('game-over-modal'),
-            modalMsg: document.getElementById('game-over-message'),
-            btnNext: document.getElementById('btn-next-year')
-        };
-
-        // --- Core Functions ---
-
-        function updateUI() {
-            // Stats
-            elements.year.textContent = state.year;
-            elements.gdp.textContent = state.gdp.toLocaleString(undefined, { maximumFractionDigits: 1 });
-            elements.inflation.textContent = state.inflation.toFixed(1);
-            elements.unemployment.textContent = state.unemployment.toFixed(1);
-            elements.approval.textContent = state.approval.toFixed(0);
-            elements.debt.innerHTML = `${state.debt.toFixed(1)} <span class="text-[10px]">兆円</span>`;
+      {/* GAME OVER MODAL */}
+      {gameOver && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-6 bg-black/90 backdrop-blur-md">
+          <div className="bg-slate-900 border border-white/20 rounded-[2.5rem] w-full max-w-sm overflow-hidden shadow-[0_0_100px_rgba(0,0,0,1)] animate-in slide-in-from-bottom-10 duration-500">
+            <div className={`p-10 text-center ${gameOver === 'win' ? 'bg-gradient-to-b from-yellow-500/20 to-transparent' : 'bg-gradient-to-b from-red-500/20 to-transparent'}`}>
+              <div className="inline-flex items-center justify-center w-20 h-20 rounded-full mb-6 bg-white/5 border border-white/10">
+                {gameOver === 'win' ? <CheckCircle2 className="text-yellow-400 w-10 h-10" /> : <AlertTriangle className="text-red-500 w-10 h-10" />}
+              </div>
+              <h2 className="text-2xl font-black mb-2 uppercase tracking-tighter">
+                {gameOver === 'win' ? '任期満了 - 伝説の宰相' : '政権崩壊 - 歴史の闇へ'}
+              </h2>
+              <p className="text-white/60 text-sm leading-relaxed">
+                {gameOver === 'win' && '激動の4年間を乗り越え、歴史に名を残しました。あなたの政策は後世に語り継がれるでしょう。'}
+                {gameOver === 'lose_support' && '支持率低下により選挙で大敗。政権交代が起きました。国民の信頼を取り戻すことはできませんでした。'}
+                {gameOver === 'lose_safety' && '怒れる暴徒により官邸が包囲され、政権は崩壊しました。秩序なき経済は破滅を招きました。'}
+              </p>
+            </div>
             
-            // Debt bar
-            const debtRatio = (state.debt / (state.gdp * 4)) * 100;
-            elements.debtProgress.style.width = `${Math.min(100, debtRatio)}%`;
-            elements.debtProgress.className = `h-full transition-all ${state.debt > state.gdp * 2 ? 'bg-rose-500' : 'bg-emerald-500'}`;
-
-            // GDP Trend
-            if (state.history.length > 1) {
-                const prev = state.history[state.history.length - 2].gdp;
-                const trend = ((state.gdp / prev) - 1) * 100;
-                elements.trendGdp.textContent = `${trend > 0 ? '↑' : '↓'} ${Math.abs(trend).toFixed(1)}%`;
-                elements.trendGdp.className = `text-xs font-bold ${trend > 0 ? 'text-emerald-500' : 'text-rose-500'}`;
-            }
-
-            // Budget Balance
-            const revenue = state.gdp * (state.policies.taxRate / 100);
-            const totalAlloc = Object.values(state.policies.spending).reduce((a, b) => a + b, 0);
-            const spending = revenue * (totalAlloc / 100);
-            const balance = revenue - spending;
-            elements.balance.textContent = `${balance >= 0 ? '+' : ''}${balance.toFixed(1)} 兆円`;
-            elements.balance.className = `text-xl font-bold ${balance >= 0 ? 'text-emerald-500' : 'text-rose-500'}`;
-
-            // Logs
-            elements.logContainer.innerHTML = state.logs.map(log => `
-                <div class="p-3 rounded-xl border-l-4 ${log.type === 'warning' ? 'bg-orange-50 border-orange-400 text-orange-800' : 'bg-slate-50 border-slate-200 text-slate-600'}">
-                    ${log.message}
+            <div className="px-10 pb-10 space-y-6">
+              <div className="grid grid-cols-2 gap-2 text-center">
+                <div className="bg-white/5 p-4 rounded-2xl border border-white/5">
+                  <div className="text-[10px] text-white/40 font-bold uppercase mb-1">最終支持率</div>
+                  <div className="text-2xl font-mono font-bold text-pink-500">{gameState.support.toFixed(1)}%</div>
                 </div>
-            `).join('');
+                <div className="bg-white/5 p-4 rounded-2xl border border-white/5">
+                  <div className="text-[10px] text-white/40 font-bold uppercase mb-1">経済評価</div>
+                  <div className="text-2xl font-mono font-bold text-blue-500">{gameState.economy.toFixed(1)}</div>
+                </div>
+              </div>
 
-            // Chart
-            const maxGdp = Math.max(...state.history.map(h => h.gdp));
-            elements.chartContainer.innerHTML = state.history.slice(-10).map((h, i, arr) => {
-                const height = (h.gdp / maxGdp) * 100;
-                const isLatest = i === arr.length - 1;
-                return `<div class="flex-1 bg-blue-200 rounded-t-sm transition-all duration-500 ${isLatest ? 'bg-blue-600' : ''}" style="height: ${height}%"></div>`;
-            }).join('');
-            elements.chartStart.textContent = state.history[0].year;
-            elements.chartEnd.textContent = state.year;
+              <div className="text-center">
+                 <div className="text-[10px] text-white/40 font-bold uppercase mb-2">SCORE</div>
+                 <div className="text-5xl font-black tracking-tighter text-transparent bg-clip-text bg-gradient-to-r from-yellow-400 via-white to-yellow-600">
+                    {Math.round(gameState.support + gameState.economy + gameState.safety)}
+                 </div>
+              </div>
 
-            // Policy Sliders Values
-            document.getElementById('val-taxRate').textContent = state.policies.taxRate + '%';
-            document.getElementById('val-welfare').textContent = state.policies.spending.welfare + '%';
-            document.getElementById('val-education').textContent = state.policies.spending.education + '%';
-            document.getElementById('val-infrastructure').textContent = state.policies.spending.infrastructure + '%';
-            document.getElementById('val-defense').textContent = state.policies.spending.defense + '%';
+              <button
+                onClick={resetGame}
+                className="w-full py-4 bg-white text-black font-black rounded-2xl flex items-center justify-center gap-2 hover:bg-white/90 active:scale-95 transition-all"
+              >
+                <RefreshCw size={18}/> 再挑戦する
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Marquee Keyframes */}
+      <style>{`
+        @keyframes marquee {
+          0% { transform: translateX(100%); }
+          100% { transform: translateX(-100%); }
         }
-
-        function calculateNextYear() {
-            if (state.gameOver) return;
-
-            let { gdp, inflation, unemployment, approval, debt, year, history, policies } = state;
-            let newLogs = [];
-
-            // 収支計算
-            const revenue = gdp * (policies.taxRate / 100);
-            const totalAlloc = Object.values(policies.spending).reduce((a, b) => a + b, 0);
-            const spending = revenue * (totalAlloc / 100);
-            const currentBalance = revenue - spending;
-
-            // 1. GDP成長率
-            const consumptionImpact = (30 - policies.taxRate) * 0.5 + (5 - unemployment) * 2;
-            const investmentImpact = (policies.spending.infrastructure * 0.2) + (policies.spending.education * 0.1);
-            const govSpendingImpact = (spending / gdp) * 10;
-            const growthRate = (consumptionImpact + investmentImpact + govSpendingImpact) / 10;
-            gdp *= (1 + growthRate / 100);
-
-            // 2. インフレ
-            const inflationPressure = (growthRate * 0.3) + (currentBalance < 0 ? Math.abs(currentBalance / revenue) * 2 : -0.5);
-            inflation = Math.max(-2, inflation + inflationPressure);
-
-            // 3. 失業率
-            const jobCreation = (growthRate * 0.4) + (policies.spending.infrastructure * 0.1);
-            unemployment = Math.max(2, unemployment - jobCreation + 0.5);
-
-            // 4. 支持率
-            const welfareBonus = (policies.spending.welfare - 25) * 0.5;
-            const econImpact = (growthRate * 1) - (unemployment * 1.5) - (Math.abs(inflation - 2) * 2);
-            const taxPenalty = (policies.taxRate - 20) * 1.5;
-            const oldApproval = approval;
-            approval = Math.min(100, Math.max(0, approval + welfareBonus + econImpact - taxPenalty));
-
-            // 5. 債務
-            debt -= currentBalance;
-
-            // Event
-            if (Math.random() > 0.7) {
-                const events = [
-                    { msg: "技術革新により生産性が向上！ GDPが増加しました。", gdp: 1.05, app: 5 },
-                    { msg: "世界的な資源価格高騰。インフレが加速しています。", inf: 2.0, app: -5 },
-                    { msg: "パンデミックの兆候。福祉支出の重要性が高まっています。", app: -10 },
-                    { msg: "国民の間で教育ブーム。将来の成長期待が高まりました。", gdp: 1.02, app: 3 },
-                ];
-                const ev = events[Math.floor(Math.random() * events.length)];
-                newLogs.push({ type: 'warning', message: `【イベント】${ev.msg}` });
-                if (ev.gdp) gdp *= ev.gdp;
-                if (ev.inf) inflation += ev.inf;
-                if (ev.app) approval += ev.app;
-            }
-
-            year++;
-            newLogs.push({ type: 'info', message: `${year}年度の報告: GDP成長率 ${growthRate.toFixed(1)}%、支持率 ${approval > oldApproval ? '上昇' : '下落'}。` });
-
-            state = { ...state, year, gdp, inflation, unemployment, approval, debt, history: [...history, { year, gdp, approval, inflation }].slice(-10), logs: [...newLogs, ...state.logs].slice(0, 10) };
-
-            // Game Over Check
-            if (approval < 20) finishGame('支持率が低下しすぎたため、解散総選挙に追い込まれました。');
-            else if (debt > gdp * 5) finishGame('国家債務が限界を超え、経済が破綻しました。');
-            else if (gdp < 100) finishGame('経済規模が縮小し、国家としての機能を失いました。');
-
-            updateUI();
+        .animate-marquee {
+          animation: marquee 20s linear infinite;
         }
+      `}</style>
+    </div>
+  );
+};
 
-        function finishGame(msg) {
-            state.gameOver = true;
-            elements.modalMsg.textContent = msg;
-            elements.modal.classList.remove('hidden');
-        }
-
-        // --- Event Listeners ---
-
-        document.getElementById('input-taxRate').addEventListener('input', (e) => {
-            state.policies.taxRate = parseInt(e.target.value);
-            updateUI();
-        });
-
-        ['welfare', 'education', 'infrastructure', 'defense'].forEach(id => {
-            document.getElementById(`input-${id}`).addEventListener('input', (e) => {
-                state.policies.spending[id] = parseInt(e.target.value);
-                updateUI();
-            });
-        });
-
-        elements.btnNext.addEventListener('click', calculateNextYear);
-
-        // --- Init ---
-        window.onload = () => {
-            lucide.createIcons();
-            updateUI();
-        };
-    </script>
-</body>
-</html>
+export default App;
