@@ -3,360 +3,405 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>政策シミュレーションゲーム - 簡易版</title>
+    <title>Economy Sim Lite - HTML Version</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
     <style>
-        body { font-family: 'Inter', sans-serif; background-color: #f7f7f7; }
-        .card { box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1); }
-        .input-group { display: flex; align-items: center; margin-bottom: 1rem; }
-        .input-group label { width: 180px; font-weight: 600; }
-        .simulation-container {
-            display: grid;
-            grid-template-columns: 1fr;
-            gap: 1.5rem;
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700;900&display=swap');
+        body { font-family: 'Inter', sans-serif; }
+        .custom-scrollbar::-webkit-scrollbar { width: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #e2e8f0; border-radius: 10px; }
+        input[type=range]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            height: 18px;
+            width: 18px;
+            border-radius: 50%;
+            background: white;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.15);
+            border: 2px solid #3b82f6;
+            cursor: pointer;
+            margin-top: -6px;
         }
-        @media (min-width: 1024px) {
-            .simulation-container {
-                grid-template-columns: 1fr 1fr;
-            }
+        input[type=range]::-webkit-slider-runnable-track {
+            width: 100%;
+            height: 6px;
+            cursor: pointer;
+            background: #f1f5f9;
+            border-radius: 3px;
         }
     </style>
 </head>
-<body class="p-4 md:p-8">
-
-    <div id="app" class="max-w-6xl mx-auto">
-        <h1 class="text-3xl font-bold text-center text-indigo-700 mb-6 border-b-2 pb-2">
-            政策シミュレーションゲーム (簡易版)
-        </h1>
-        <p class="text-center text-gray-600 mb-6">
-            税率と金利を操作して、10期間（年）後の「経済」と「支持率」のバランスを取りましょう。
-        </p>
-
-        <!-- 政策入力と評価結果カード -->
-        <div class="card bg-white p-6 rounded-xl mb-8 border border-gray-200">
-            <h2 class="text-2xl font-semibold text-indigo-600 mb-4">政策介入シミュレーション</h2>
-            
-            <div class="md:flex md:space-x-8">
-                <!-- 政策入力エリア -->
-                <div class="flex-1">
-                    <h3 class="text-xl font-medium mb-3 border-b pb-1 text-gray-700">政策の決定 (次の10期間)</h3>
-                    
-                    <div class="input-group">
-                        <label for="tax-shock">税率 ($\tau$) 変更率:</label>
-                        <input type="number" id="tax-shock" value="0" min="-10" max="10" step="0.5" 
-                               class="w-24 p-2 border rounded-lg text-right focus:ring-indigo-500 focus:border-indigo-500 mr-2">
-                        <span class="text-gray-500">%</span>
-                        <p class="ml-4 text-sm text-gray-500">現在の税率からの増減率</p>
-                    </div>
-
-                    <div class="input-group">
-                        <label for="rate-shock">長期金利 ($r$) 変更幅:</label>
-                        <input type="number" id="rate-shock" value="0" min="-3.0" max="3.0" step="0.1" 
-                               class="w-24 p-2 border rounded-lg text-right focus:ring-indigo-500 focus:border-indigo-500 mr-2">
-                        <span class="text-gray-500">pt</span>
-                        <p class="ml-4 text-sm text-gray-500">現在の金利からの絶対増減幅</p>
-                    </div>
-
-                    <button onclick="runSimulation()" 
-                            class="w-full mt-4 bg-indigo-600 text-white py-3 rounded-xl hover:bg-indigo-700 transition duration-200 text-lg font-semibold shadow-md hover:shadow-lg">
-                        シミュレーション実行 (10年間)
-                    </button>
+<body class="bg-slate-50 text-slate-900 p-4 md:p-8">
+    <div class="max-w-6xl mx-auto">
+        <!-- Header -->
+        <header class="flex flex-col md:flex-row md:items-center justify-between mb-8 gap-4">
+            <div>
+                <h1 class="text-3xl font-black text-slate-800 tracking-tight">Economy Sim <span class="text-blue-600">Lite</span></h1>
+                <p class="text-slate-500 font-medium">国家経済シミュレーション Ver 2.0 (HTML)</p>
+            </div>
+            <div class="flex items-center gap-4 bg-white px-6 py-3 rounded-2xl shadow-sm border border-slate-100">
+                <div class="text-center border-r border-slate-100 pr-4">
+                    <p class="text-[10px] text-slate-400 uppercase font-bold">現在の年度</p>
+                    <p id="stat-year" class="text-xl font-bold text-blue-600">2024</p>
                 </div>
+                <div class="text-center">
+                    <p class="text-[10px] text-slate-400 uppercase font-bold">予算収支</p>
+                    <p id="stat-balance" class="text-xl font-bold text-rose-500">-10.0 <span class="text-xs">兆円</span></p>
+                </div>
+            </div>
+        </header>
 
-                <!-- 結果表示エリア -->
-                <div class="flex-1 mt-6 md:mt-0 p-4 border rounded-xl bg-indigo-50">
-                    <h3 class="text-xl font-medium mb-3 border-b pb-1 text-gray-700">最終評価 (10年後)</h3>
-                    <div id="results" class="space-y-3">
-                        <p id="final-score" class="text-3xl font-extrabold text-center text-indigo-700">---</p>
-                        <p class="text-lg font-semibold text-gray-800">
-                            <span class="text-indigo-500">経済スコア (成長率):</span> <span id="economic-gain">---</span> %
-                        </p>
-                        <p class="text-lg font-semibold text-gray-800">
-                            <span class="text-indigo-500">支持率:</span> <span id="approval-rate">---</span> pt
-                        </p>
-                        <p class="text-sm text-gray-500">※ 最終スコアは成長率と支持率のバランスで決定されます。</p>
-                    </div>
+        <!-- Main Stats Grid -->
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+            <!-- GDP -->
+            <div class="bg-white p-4 rounded-xl shadow-sm border border-slate-100 flex flex-col justify-between">
+                <div class="flex items-center justify-between mb-2">
+                    <div class="p-2 rounded-lg bg-blue-500 bg-opacity-10 text-blue-600"><i data-lucide="trending-up"></i></div>
+                    <span id="trend-gdp" class="text-xs font-bold text-emerald-500">0.0%</span>
+                </div>
+                <div>
+                    <p class="text-slate-500 text-xs font-medium uppercase tracking-wider">国内総生産 (GDP)</p>
+                    <p class="text-2xl font-bold text-slate-800"><span id="stat-gdp">500</span><span class="text-sm font-normal text-slate-400 ml-1">兆円</span></p>
+                </div>
+            </div>
+            <!-- Inflation -->
+            <div class="bg-white p-4 rounded-xl shadow-sm border border-slate-100 flex flex-col justify-between">
+                <div class="flex items-center justify-between mb-2">
+                    <div class="p-2 rounded-lg bg-orange-500 bg-opacity-10 text-orange-600"><i data-lucide="activity"></i></div>
+                </div>
+                <div>
+                    <p class="text-slate-500 text-xs font-medium uppercase tracking-wider">インフレ率</p>
+                    <p class="text-2xl font-bold text-slate-800"><span id="stat-inflation">2.0</span><span class="text-sm font-normal text-slate-400 ml-1">%</span></p>
+                </div>
+            </div>
+            <!-- Unemployment -->
+            <div class="bg-white p-4 rounded-xl shadow-sm border border-slate-100 flex flex-col justify-between">
+                <div class="flex items-center justify-between mb-2">
+                    <div class="p-2 rounded-lg bg-indigo-500 bg-opacity-10 text-indigo-600"><i data-lucide="users"></i></div>
+                </div>
+                <div>
+                    <p class="text-slate-500 text-xs font-medium uppercase tracking-wider">失業率</p>
+                    <p class="text-2xl font-bold text-slate-800"><span id="stat-unemployment">4.5</span><span class="text-sm font-normal text-slate-400 ml-1">%</span></p>
+                </div>
+            </div>
+            <!-- Approval -->
+            <div class="bg-white p-4 rounded-xl shadow-sm border border-slate-100 flex flex-col justify-between">
+                <div class="flex items-center justify-between mb-2">
+                    <div class="p-2 rounded-lg bg-rose-500 bg-opacity-10 text-rose-600"><i data-lucide="heart"></i></div>
+                </div>
+                <div>
+                    <p class="text-slate-500 text-xs font-medium uppercase tracking-wider">国民支持率</p>
+                    <p class="text-2xl font-bold text-slate-800"><span id="stat-approval">50</span><span class="text-sm font-normal text-slate-400 ml-1">%</span></p>
                 </div>
             </div>
         </div>
 
-        <!-- グラフエリア -->
-        <div class="simulation-container">
-            <div class="card bg-white p-4 rounded-xl">
-                <h3 class="text-center font-semibold text-lg mb-2 text-gray-700">GDPと可処分所得の推移</h3>
-                <canvas id="gdpChart"></canvas>
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+            <!-- Controls Panel -->
+            <div class="lg:col-span-2 space-y-6">
+                <div class="bg-white p-6 rounded-3xl shadow-sm border border-slate-100">
+                    <div class="flex items-center gap-2 mb-6">
+                        <i data-lucide="chevron-right" class="text-blue-600"></i>
+                        <h2 class="text-lg font-bold">政策決定パネル</h2>
+                    </div>
+
+                    <!-- Tax Policy -->
+                    <div class="mb-8">
+                        <div class="flex justify-between items-end mb-3">
+                            <label class="font-bold text-slate-700 flex items-center gap-2">所得・法人税率</label>
+                            <span id="val-taxRate" class="text-2xl font-black text-blue-600">20%</span>
+                        </div>
+                        <input type="range" id="input-taxRate" min="5" max="50" step="1" value="20" class="w-full h-2 bg-slate-100 rounded-lg appearance-none cursor-pointer accent-blue-600">
+                    </div>
+
+                    <!-- Budget Allocation -->
+                    <div class="space-y-6">
+                        <label class="font-bold text-slate-700 block mb-4">歳入予算の配分 (%)</label>
+                        
+                        <div class="flex flex-col gap-2">
+                            <div class="flex justify-between text-sm font-medium">
+                                <span class="flex items-center gap-2 text-slate-600"><i data-lucide="heart" size="16"></i> 社会保障・福祉</span>
+                                <span id="val-welfare" class="font-bold">30%</span>
+                            </div>
+                            <input type="range" id="input-welfare" min="0" max="50" step="1" value="30" class="w-full h-1.5 bg-slate-100 rounded-lg appearance-none cursor-pointer accent-rose-500">
+                        </div>
+
+                        <div class="flex flex-col gap-2">
+                            <div class="flex justify-between text-sm font-medium">
+                                <span class="flex items-center gap-2 text-slate-600"><i data-lucide="book-open" size="16"></i> 教育・科学技術</span>
+                                <span id="val-education" class="font-bold">20%</span>
+                            </div>
+                            <input type="range" id="input-education" min="0" max="50" step="1" value="20" class="w-full h-1.5 bg-slate-100 rounded-lg appearance-none cursor-pointer accent-indigo-500">
+                        </div>
+
+                        <div class="flex flex-col gap-2">
+                            <div class="flex justify-between text-sm font-medium">
+                                <span class="flex items-center gap-2 text-slate-600"><i data-lucide="construction" size="16"></i> インフラ・公共事業</span>
+                                <span id="val-infrastructure" class="font-bold">25%</span>
+                            </div>
+                            <input type="range" id="input-infrastructure" min="0" max="50" step="1" value="25" class="w-full h-1.5 bg-slate-100 rounded-lg appearance-none cursor-pointer accent-emerald-500">
+                        </div>
+
+                        <div class="flex flex-col gap-2">
+                            <div class="flex justify-between text-sm font-medium">
+                                <span class="flex items-center gap-2 text-slate-600"><i data-lucide="shield" size="16"></i> 国防・安全保障</span>
+                                <span id="val-defense" class="font-bold">15%</span>
+                            </div>
+                            <input type="range" id="input-defense" min="0" max="50" step="1" value="15" class="w-full h-1.5 bg-slate-100 rounded-lg appearance-none cursor-pointer accent-slate-700">
+                        </div>
+                    </div>
+
+                    <div class="mt-8 pt-6 border-t border-slate-50">
+                        <button id="btn-next-year" class="w-full bg-slate-900 text-white py-4 rounded-2xl font-bold hover:bg-blue-600 transition-all active:scale-95 flex items-center justify-center gap-2 shadow-lg">
+                            次の年度へ進行 (Next Year)
+                        </button>
+                    </div>
+                </div>
+
+                <!-- GDP Chart -->
+                <div class="bg-white p-6 rounded-3xl shadow-sm border border-slate-100">
+                    <h3 class="font-bold mb-4 text-slate-700">GDP推移 (直近10年)</h3>
+                    <div id="chart-container" class="h-32 w-full flex items-end gap-1 px-2">
+                        <!-- Bars will be generated here -->
+                    </div>
+                    <div class="flex justify-between mt-2 text-[10px] text-slate-400 font-bold px-2">
+                        <span id="chart-start-year">2024</span>
+                        <span id="chart-end-year">2024</span>
+                    </div>
+                </div>
             </div>
-            <div class="card bg-white p-4 rounded-xl">
-                <h3 class="text-center font-semibold text-lg mb-2 text-gray-700">消費・投資・政府支出の推移</h3>
-                <canvas id="componentsChart"></canvas>
+
+            <!-- Sidebar -->
+            <div class="space-y-6">
+                <div class="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 h-full flex flex-col">
+                    <h3 class="font-bold text-slate-700 flex items-center gap-2 mb-4">
+                        <i data-lucide="alert-circle" class="text-orange-500"></i> 活動・イベントログ
+                    </h3>
+                    <div id="log-container" class="flex-1 space-y-3 overflow-y-auto max-h-[400px] pr-2 custom-scrollbar text-xs leading-relaxed">
+                        <!-- Logs will be added here -->
+                    </div>
+                    <div class="mt-6 pt-6 border-t border-slate-50">
+                        <div class="flex justify-between items-center text-sm font-bold mb-2">
+                            <span class="text-slate-500">国家債務残高</span>
+                            <span id="stat-debt" class="text-slate-800">1000.0 <span class="text-[10px]">兆円</span></span>
+                        </div>
+                        <div class="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
+                            <div id="debt-progress" class="h-full bg-emerald-500 transition-all" style="width: 25%"></div>
+                        </div>
+                        <p class="text-[10px] text-slate-400 mt-1 text-right italic">対GDP比上限 500%</p>
+                    </div>
+                </div>
             </div>
         </div>
-        
+    </div>
+
+    <!-- Game Over Modal -->
+    <div id="game-over-modal" class="hidden fixed inset-0 bg-slate-900/80 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+        <div class="bg-white rounded-3xl p-8 max-w-md w-full text-center shadow-2xl">
+            <div class="w-20 h-20 bg-rose-100 text-rose-600 rounded-full flex items-center justify-center mx-auto mb-6">
+                <i data-lucide="alert-circle" size="40"></i>
+            </div>
+            <h2 class="text-2xl font-black mb-4">ゲームオーバー</h2>
+            <p id="game-over-message" class="text-slate-600 mb-8 font-medium"></p>
+            <button onclick="window.location.reload()" class="w-full bg-blue-600 text-white py-4 rounded-2xl font-bold hover:bg-blue-700 transition-all">
+                最初からやり直す
+            </button>
+        </div>
     </div>
 
     <script>
-        // === マクロ経済モデルのパラメータ (推定結果) ===
-        // 注: c0, i0, g0 は切片ですが、簡易モデルの安定性のため固定値として扱います。
-        const PARAMS = {
-            C0: 0.8149,
-            C1: 0.1129, // 限界消費性向 (dispo_incomeの係数)
-            C2: 0.8149, // 消費の慣性 (Ct-1の係数)
-            I0: 145.4290,
-            I1: 145.4290, // 金利感応度 (long_rateの係数)
-            I2: 0.9997,  // 投資の慣性 (It-1の係数)
-            G0: 0.0330,
-            G2: 0.9895,  // 政府支出の慣性 (Gt-1の係数)
+        // --- Game State ---
+        let state = {
+            year: 2024,
+            gdp: 500,
+            inflation: 2.0,
+            unemployment: 4.5,
+            approval: 50,
+            debt: 1000,
+            history: [{ year: 2024, gdp: 500, approval: 50, inflation: 2.0 }],
+            policies: {
+                taxRate: 20,
+                spending: {
+                    welfare: 30,
+                    education: 20,
+                    infrastructure: 25,
+                    defense: 15
+                }
+            },
+            logs: [{ type: 'info', message: '新政権が発足しました。経済を安定させ、成長に導いてください。' }],
+            gameOver: false
         };
 
-        // 評価関数パラメータ
-        const WEIGHT_ECONOMIC = 0.6;
-        const WEIGHT_APPROVAL = 0.4;
-        const PENALTY_INSTABILITY = 50; 
-
-        // 初期値 (データ d の最新行を再現したダミーデータ)
-        const INITIAL_STATE = {
-            Y: 1200.0,      // GDP
-            C: 750.0,       // Consumption
-            I: 250.0,       // Investment
-            G: 200.0,       // Government Expenditure
-            T_total: 180.0, // 総税収 (t_total)
-            r: 1.5          // Long Rate (r)
+        // --- DOM Elements ---
+        const elements = {
+            year: document.getElementById('stat-year'),
+            balance: document.getElementById('stat-balance'),
+            gdp: document.getElementById('stat-gdp'),
+            trendGdp: document.getElementById('trend-gdp'),
+            inflation: document.getElementById('stat-inflation'),
+            unemployment: document.getElementById('stat-unemployment'),
+            approval: document.getElementById('stat-approval'),
+            debt: document.getElementById('stat-debt'),
+            debtProgress: document.getElementById('debt-progress'),
+            logContainer: document.getElementById('log-container'),
+            chartContainer: document.getElementById('chart-container'),
+            chartStart: document.getElementById('chart-start-year'),
+            chartEnd: document.getElementById('chart-end-year'),
+            modal: document.getElementById('game-over-modal'),
+            modalMsg: document.getElementById('game-over-message'),
+            btnNext: document.getElementById('btn-next-year')
         };
-        // 初期税率 (総税収 / GDP)
-        const TAU_0 = INITIAL_STATE.T_total / INITIAL_STATE.Y; // 180 / 1200 = 0.15 (15%)
-        // 初期可処分所得
-        const DI_0 = INITIAL_STATE.Y - INITIAL_STATE.T_total; // 1200 - 180 = 1020
 
-        let gdpChart, componentsChart;
+        // --- Core Functions ---
 
-        /**
-         * マクロ政策シミュレーションを実行し、評価スコアを計算する関数。
-         */
-        function macroPolicySimulation(shockTauPercent, shockRPercent, numPeriods = 10) {
+        function updateUI() {
+            // Stats
+            elements.year.textContent = state.year;
+            elements.gdp.textContent = state.gdp.toLocaleString(undefined, { maximumFractionDigits: 1 });
+            elements.inflation.textContent = state.inflation.toFixed(1);
+            elements.unemployment.textContent = state.unemployment.toFixed(1);
+            elements.approval.textContent = state.approval.toFixed(0);
+            elements.debt.innerHTML = `${state.debt.toFixed(1)} <span class="text-[10px]">兆円</span>`;
             
-            // 政策ショックの目標値
-            const tauTarget = TAU_0 * (1 + shockTauPercent / 100);
-            const rTarget = INITIAL_STATE.r + shockRPercent;
+            // Debt bar
+            const debtRatio = (state.debt / (state.gdp * 4)) * 100;
+            elements.debtProgress.style.width = `${Math.min(100, debtRatio)}%`;
+            elements.debtProgress.className = `h-full transition-all ${state.debt > state.gdp * 2 ? 'bg-rose-500' : 'bg-emerald-500'}`;
 
-            // 結果を格納する配列を初期化
-            const Y_sim = [];
-            const C_sim = [];
-            const I_sim = [];
-            const G_sim = [];
-            const T_sim = [];
-            const DispoIncome_sim = [];
-
-            // ラグ変数 (t-1) の初期化
-            let C_prev = INITIAL_STATE.C;
-            let I_prev = INITIAL_STATE.I;
-            let G_prev = INITIAL_STATE.G;
-            let Y_prev = INITIAL_STATE.Y;
-            let DispoIncome_prev = DI_0;
-
-            // 評価指標用の成長率配列 (1期目から計算するため、初期値も含めた配列を後で作成)
-            const Y_growth = [];
-            const DI_growth = [];
-
-            // --- シミュレーションループ ---
-            for (let t = 0; t < numPeriods; t++) {
-                const tau_t = tauTarget;
-                const r_t = rTarget;
-
-                // 1. 投資 I_t を決定 (I_t = i0 + i1 * r_t + i2 * I_prev)
-                const I_t = PARAMS.I0 + PARAMS.I1 * r_t + PARAMS.I2 * I_prev;
-                
-                // 2. 政府支出 G_t を決定 (G_t = g0 + g2 * G_prev)
-                const G_t = PARAMS.G0 + PARAMS.G2 * G_prev;
-                
-                // 3. 均衡GDP Y_t を決定
-                // Yt = [1 / (1 - c1 * (1 - tau_t))] * [c0 + c2 * Ct-1 + I_t + G_t]
-                const multiplierDenominator = 1 - PARAMS.C1 * (1 - tau_t);
-                
-                let Y_t;
-                if (multiplierDenominator <= 0) {
-                    Y_t = NaN; // 不安定な場合はNaN
-                } else {
-                    Y_t = (PARAMS.C0 + PARAMS.C2 * C_prev + I_t + G_t) / multiplierDenominator;
-                }
-
-                // 4. 税収 T_t を決定 (T_t = tau_t * Y_t)
-                const T_t = tau_t * Y_t;
-
-                // 5. 消費 C_t と 可処分所得 Y-T を決定
-                const DispoIncome_t = Y_t - T_t;
-                // C_t = c0 + c1 * (Yt - Tt) + c2 * Ct-1
-                const C_t = PARAMS.C0 + PARAMS.C1 * DispoIncome_t + PARAMS.C2 * C_prev;
-                
-                // 成長率の計算 (t>0 で計算可能)
-                if (t >= 0) {
-                    Y_growth.push((Y_t / Y_prev - 1) * 100);
-                    DI_growth.push((DispoIncome_t / DispoIncome_prev - 1) * 100);
-                }
-
-                // 結果を保存
-                Y_sim.push(Y_t);
-                C_sim.push(C_t);
-                I_sim.push(I_t);
-                G_sim.push(G_t);
-                T_sim.push(T_t);
-                DispoIncome_sim.push(DispoIncome_t);
-                
-                // ラグ変数を更新
-                C_prev = C_t;
-                I_prev = I_t;
-                G_prev = G_t;
-                Y_prev = Y_t;
-                DispoIncome_prev = DispoIncome_t;
+            // GDP Trend
+            if (state.history.length > 1) {
+                const prev = state.history[state.history.length - 2].gdp;
+                const trend = ((state.gdp / prev) - 1) * 100;
+                elements.trendGdp.textContent = `${trend > 0 ? '↑' : '↓'} ${Math.abs(trend).toFixed(1)}%`;
+                elements.trendGdp.className = `text-xs font-bold ${trend > 0 ? 'text-emerald-500' : 'text-rose-500'}`;
             }
 
-            // --- 目的関数の実装（評価） ---
-            const meanYGrowth = Y_growth.reduce((sum, val) => sum + val, 0) / Y_growth.length;
-            const meanDIGrowth = DI_growth.reduce((sum, val) => sum + val, 0) / DI_growth.length;
-            
-            // 安定性ペナルティの計算 (標準偏差)
-            const YGrowthStd = Math.sqrt(Y_growth.map(x => Math.pow(x - meanYGrowth, 2)).reduce((a, b) => a + b) / Y_growth.length);
-            
-            // 1. 経済スコア (平均GDP成長率)
-            const EconomicGain = meanYGrowth;
-            
-            // 2. 支持率スコア (50pt + 平均可処分所得成長率 * 10)
-            const ApprovalRate = 50 + meanDIGrowth * 10; 
-            
-            // 3. 安定性ペナルティ
-            const InstabilityPenalty = YGrowthStd * PENALTY_INSTABILITY;
-            
-            // 最終スコアの統合
-            const FinalScore = (WEIGHT_ECONOMIC * EconomicGain) + (WEIGHT_APPROVAL * ApprovalRate) - InstabilityPenalty;
+            // Budget Balance
+            const revenue = state.gdp * (state.policies.taxRate / 100);
+            const totalAlloc = Object.values(state.policies.spending).reduce((a, b) => a + b, 0);
+            const spending = revenue * (totalAlloc / 100);
+            const balance = revenue - spending;
+            elements.balance.textContent = `${balance >= 0 ? '+' : ''}${balance.toFixed(1)} 兆円`;
+            elements.balance.className = `text-xl font-bold ${balance >= 0 ? 'text-emerald-500' : 'text-rose-500'}`;
 
-            return {
-                results: { Y: Y_sim, C: C_sim, I: I_sim, G: G_sim, DI: DispoIncome_sim },
-                score: { FinalScore, EconomicGain, ApprovalRate }
-            };
+            // Logs
+            elements.logContainer.innerHTML = state.logs.map(log => `
+                <div class="p-3 rounded-xl border-l-4 ${log.type === 'warning' ? 'bg-orange-50 border-orange-400 text-orange-800' : 'bg-slate-50 border-slate-200 text-slate-600'}">
+                    ${log.message}
+                </div>
+            `).join('');
+
+            // Chart
+            const maxGdp = Math.max(...state.history.map(h => h.gdp));
+            elements.chartContainer.innerHTML = state.history.slice(-10).map((h, i, arr) => {
+                const height = (h.gdp / maxGdp) * 100;
+                const isLatest = i === arr.length - 1;
+                return `<div class="flex-1 bg-blue-200 rounded-t-sm transition-all duration-500 ${isLatest ? 'bg-blue-600' : ''}" style="height: ${height}%"></div>`;
+            }).join('');
+            elements.chartStart.textContent = state.history[0].year;
+            elements.chartEnd.textContent = state.year;
+
+            // Policy Sliders Values
+            document.getElementById('val-taxRate').textContent = state.policies.taxRate + '%';
+            document.getElementById('val-welfare').textContent = state.policies.spending.welfare + '%';
+            document.getElementById('val-education').textContent = state.policies.spending.education + '%';
+            document.getElementById('val-infrastructure').textContent = state.policies.spending.infrastructure + '%';
+            document.getElementById('val-defense').textContent = state.policies.spending.defense + '%';
         }
 
-        /**
-         * グラフを初期化または更新する関数
-         */
-        function updateCharts(data) {
-            const labels = Array.from({length: 10}, (_, i) => `T+${i + 1}`);
-            
-            // --- GDPと可処分所得のグラフ ---
-            const gdpCtx = document.getElementById('gdpChart').getContext('2d');
-            if (gdpChart) gdpChart.destroy();
+        function calculateNextYear() {
+            if (state.gameOver) return;
 
-            gdpChart = new Chart(gdpCtx, {
-                type: 'line',
-                data: {
-                    labels: labels,
-                    datasets: [
-                        {
-                            label: 'GDP (Y)',
-                            data: data.Y,
-                            borderColor: '#4f46e5',
-                            backgroundColor: 'rgba(79, 70, 229, 0.1)',
-                            borderWidth: 3,
-                            fill: false,
-                        },
-                        {
-                            label: '可処分所得 (Y-T)',
-                            data: data.DI,
-                            borderColor: '#10b981',
-                            backgroundColor: 'rgba(16, 185, 129, 0.1)',
-                            borderWidth: 2,
-                            fill: false,
-                            borderDash: [5, 5]
-                        }
-                    ]
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: true,
-                    plugins: { legend: { position: 'top' } },
-                    scales: { y: { beginAtZero: false } }
-                }
+            let { gdp, inflation, unemployment, approval, debt, year, history, policies } = state;
+            let newLogs = [];
+
+            // 収支計算
+            const revenue = gdp * (policies.taxRate / 100);
+            const totalAlloc = Object.values(policies.spending).reduce((a, b) => a + b, 0);
+            const spending = revenue * (totalAlloc / 100);
+            const currentBalance = revenue - spending;
+
+            // 1. GDP成長率
+            const consumptionImpact = (30 - policies.taxRate) * 0.5 + (5 - unemployment) * 2;
+            const investmentImpact = (policies.spending.infrastructure * 0.2) + (policies.spending.education * 0.1);
+            const govSpendingImpact = (spending / gdp) * 10;
+            const growthRate = (consumptionImpact + investmentImpact + govSpendingImpact) / 10;
+            gdp *= (1 + growthRate / 100);
+
+            // 2. インフレ
+            const inflationPressure = (growthRate * 0.3) + (currentBalance < 0 ? Math.abs(currentBalance / revenue) * 2 : -0.5);
+            inflation = Math.max(-2, inflation + inflationPressure);
+
+            // 3. 失業率
+            const jobCreation = (growthRate * 0.4) + (policies.spending.infrastructure * 0.1);
+            unemployment = Math.max(2, unemployment - jobCreation + 0.5);
+
+            // 4. 支持率
+            const welfareBonus = (policies.spending.welfare - 25) * 0.5;
+            const econImpact = (growthRate * 1) - (unemployment * 1.5) - (Math.abs(inflation - 2) * 2);
+            const taxPenalty = (policies.taxRate - 20) * 1.5;
+            const oldApproval = approval;
+            approval = Math.min(100, Math.max(0, approval + welfareBonus + econImpact - taxPenalty));
+
+            // 5. 債務
+            debt -= currentBalance;
+
+            // Event
+            if (Math.random() > 0.7) {
+                const events = [
+                    { msg: "技術革新により生産性が向上！ GDPが増加しました。", gdp: 1.05, app: 5 },
+                    { msg: "世界的な資源価格高騰。インフレが加速しています。", inf: 2.0, app: -5 },
+                    { msg: "パンデミックの兆候。福祉支出の重要性が高まっています。", app: -10 },
+                    { msg: "国民の間で教育ブーム。将来の成長期待が高まりました。", gdp: 1.02, app: 3 },
+                ];
+                const ev = events[Math.floor(Math.random() * events.length)];
+                newLogs.push({ type: 'warning', message: `【イベント】${ev.msg}` });
+                if (ev.gdp) gdp *= ev.gdp;
+                if (ev.inf) inflation += ev.inf;
+                if (ev.app) approval += ev.app;
+            }
+
+            year++;
+            newLogs.push({ type: 'info', message: `${year}年度の報告: GDP成長率 ${growthRate.toFixed(1)}%、支持率 ${approval > oldApproval ? '上昇' : '下落'}。` });
+
+            state = { ...state, year, gdp, inflation, unemployment, approval, debt, history: [...history, { year, gdp, approval, inflation }].slice(-10), logs: [...newLogs, ...state.logs].slice(0, 10) };
+
+            // Game Over Check
+            if (approval < 20) finishGame('支持率が低下しすぎたため、解散総選挙に追い込まれました。');
+            else if (debt > gdp * 5) finishGame('国家債務が限界を超え、経済が破綻しました。');
+            else if (gdp < 100) finishGame('経済規模が縮小し、国家としての機能を失いました。');
+
+            updateUI();
+        }
+
+        function finishGame(msg) {
+            state.gameOver = true;
+            elements.modalMsg.textContent = msg;
+            elements.modal.classList.remove('hidden');
+        }
+
+        // --- Event Listeners ---
+
+        document.getElementById('input-taxRate').addEventListener('input', (e) => {
+            state.policies.taxRate = parseInt(e.target.value);
+            updateUI();
+        });
+
+        ['welfare', 'education', 'infrastructure', 'defense'].forEach(id => {
+            document.getElementById(`input-${id}`).addEventListener('input', (e) => {
+                state.policies.spending[id] = parseInt(e.target.value);
+                updateUI();
             });
+        });
 
-            // --- 消費・投資・政府支出のグラフ ---
-            const componentsCtx = document.getElementById('componentsChart').getContext('2d');
-            if (componentsChart) componentsChart.destroy();
+        elements.btnNext.addEventListener('click', calculateNextYear);
 
-            componentsChart = new Chart(componentsCtx, {
-                type: 'line',
-                data: {
-                    labels: labels,
-                    datasets: [
-                        {
-                            label: '消費 (C)',
-                            data: data.C,
-                            borderColor: '#f59e0b',
-                            backgroundColor: 'rgba(245, 158, 11, 0.1)',
-                            fill: false
-                        },
-                        {
-                            label: '投資 (I)',
-                            data: data.I,
-                            borderColor: '#ef4444',
-                            backgroundColor: 'rgba(239, 68, 68, 0.1)',
-                            fill: false
-                        },
-                        {
-                            label: '政府支出 (G)',
-                            data: data.G,
-                            borderColor: '#3b82f6',
-                            backgroundColor: 'rgba(59, 130, 246, 0.1)',
-                            fill: false
-                        }
-                    ]
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: true,
-                    plugins: { legend: { position: 'top' } },
-                    scales: { y: { beginAtZero: false } }
-                }
-            });
-        }
-
-        /**
-         * ボタンクリックでシミュレーションを実行し、UIを更新する
-         */
-        function runSimulation() {
-            const shockTauPercent = parseFloat(document.getElementById('tax-shock').value) || 0;
-            const shockRPercent = parseFloat(document.getElementById('rate-shock').value) || 0;
-
-            const { results, score } = macroPolicySimulation(shockTauPercent, shockRPercent);
-
-            // 評価結果の表示
-            document.getElementById('final-score').textContent = score.FinalScore.toFixed(0);
-            document.getElementById('economic-gain').textContent = score.EconomicGain.toFixed(2);
-            document.getElementById('approval-rate').textContent = score.ApprovalRate.toFixed(2);
-            
-            // グラフの更新
-            updateCharts(results);
-
-            // メッセージボックス
-            const messageBox = document.createElement('div');
-            messageBox.className = 'fixed top-4 right-4 bg-green-500 text-white p-4 rounded-lg shadow-xl transition-opacity duration-300';
-            messageBox.textContent = `シミュレーション完了: 最終スコア ${score.FinalScore.toFixed(0)}を達成しました。`;
-            document.body.appendChild(messageBox);
-            setTimeout(() => {
-                messageBox.remove();
-            }, 3000);
-        }
-
-        // 初期グラフの描画
-        window.onload = function() {
-            // 初期状態のシミュレーションを実行して、デフォルトのグラフを表示
-            const { results } = macroPolicySimulation(0, 0); 
-            updateCharts(results);
-
-             // 初期スコア表示のクリア
-            document.getElementById('final-score').textContent = "政策を入力";
-            document.getElementById('economic-gain').textContent = "---";
-            document.getElementById('approval-rate').textContent = "---";
+        // --- Init ---
+        window.onload = () => {
+            lucide.createIcons();
+            updateUI();
         };
-
     </script>
 </body>
 </html>
