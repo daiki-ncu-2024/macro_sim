@@ -35,3 +35,30 @@
 *   `gdp_data_251214.csv`, `longrate_data_251214.csv`, `shortrate_data_251214.csv`, `tax_data_251215.csv`: 元データ
 *   `Untitled.ipynb`, `data -20251031ver.csv`: 分析の試作ファイル（本筋とは無関係）
 *   `tax_data_251214.csv`: 旧税データ（分析には不使用）
+
+## データソース
+
+この分析では、以下の公的機関が公表している統計データを使用しています。
+
+*   **実質GDP・GDPデフレーター（物価）**
+    *   **出典**: 内閣府「国民経済計算（SNA）」
+    *   **内容**: 以下の2つの実質季節調整系列データを結合して使用。
+        *   1980年〜1994年: [2015年（平成27年）基準改定値](https://www.esri.cao.go.jp/jp/sna/data/data_list/h27_retroactive/27kani_top.html)
+        *   1994年〜2025年: [2025年第3次速報（2020年基準）](https://www.esri.cao.go.jp/jp/sna/data/data_list/sokuhou/files/2025/qe253_2/gdemenuja.html)
+    *   **備考**: 基準年が異なるため、`test.ipynb`内で2020年基準に統一する調整を行っています。
+
+*   **税収**
+    *   **出典**: 財務省「昭和54年度（1979年度）以降の税収の推移」
+    *   **内容**: 一般会計税収の年次データを、名目GDPの比率に応じて四半期データに変換して使用。
+    *   **リンク**: [（参考）昭和54年度以降の一般会計税収、歳出総額及び公債発行額の推移](https://www.mof.go.jp/tax_policy/summary/condition/011.htm)
+
+*   **金利（新発10年国債利回り）**
+    *   **出典**: 財務省「国債金利情報」
+    *   **内容**: 新発10年国債利回りを使用。
+    *   **リンク**: [国債金利情報](https://www.mof.go.jp/jgbs/reference/interest_rate/)
+
+*   **短期金利（無担保コールレート O/N）**
+    *   **出典**: 日本銀行「短期金融市場金利」
+    *   **内容**: 月平均金利を四半期に変換。
+    *   **リンク**: [時系列統計データ検索サイト](https://www.stat-search.boj.or.jp/ssi/mtshtml/fm02_m_1.html)
+    *   **備考**: このデータは `test.ipynb` で加工され `d_data.csv` に含まれますが、最終的な `ECM.ipynb` のモデル分析では使用されませんでした。
